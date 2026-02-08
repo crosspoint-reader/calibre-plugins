@@ -17,12 +17,11 @@ from .log import add_log
 class CrossPointDevice(DeviceConfig, DevicePlugin):
     name = 'CrossPoint Reader'
     gui_name = 'CrossPoint Reader'
-    description = 'CrossPoint Reader wireless device'
+    description = 'CrossPoint Reader wireless device with baseline JPEG conversion'
     supported_platforms = ['windows', 'osx', 'linux']
-    author = 'CrossPoint Reader'
-    version = (0, 1, 0)
+    author = 'Megabit'
+    version = (0, 2, 0)
 
-    # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
     PRODUCT_ID = [0xFFFF]
     BCD = [0xFFFF]
@@ -33,9 +32,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     MUST_READ_METADATA = False
     MANAGES_DEVICE_PRESENCE = True
     DEVICE_PLUGBOARD_NAME = 'CROSSPOINT_READER'
-    MUST_READ_METADATA = False
     SUPPORTS_DEVICE_DB = False
-    # Disable Calibre's device cache so we always refresh from device.
     device_is_usb_mass_storage = False
 
     def __init__(self, path):
@@ -55,7 +52,6 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             except Exception:
                 pass
 
-    # Device discovery / presence
     def _discover(self):
         now = time.time()
         if now - self.last_discovery < 2.0:
@@ -182,7 +178,6 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         return books
 
     def sync_booklists(self, booklists, end_session=True):
-        # No on-device metadata sync supported.
         return None
 
     def card_prefix(self, end_session=True):
@@ -194,6 +189,36 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     def free_space(self, end_session=True):
         return 10 * 1024 * 1024 * 1024, 0, 0
 
+    def _convert_epub_to_baseline(self, filepath):
+        from calibre.ptempfile import PersistentTemporaryFile
+        from .baseline_jpeg import convert_epub_images
+
+        quality = PREFS.get('jpeg_quality', 85)
+
+        temp_file = PersistentTemporaryFile(suffix='.epub')
+        temp_path = temp_file.name
+        temp_file.close()
+
+        try:
+            import shutil
+            shutil.copy2(filepath, temp_path)
+
+            converted = convert_epub_images(
+                temp_path,
+                output_path=temp_path,
+                quality=quality,
+                logger=self._log
+            )
+
+            self._log(f'[CrossPoint] Converted {converted} images to baseline JPEG')
+            return temp_path
+
+        except Exception as exc:
+            self._log(f'[CrossPoint] Baseline conversion failed: {exc}')
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return filepath
+
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         host = self.device_host or PREFS['host']
         port = self.device_port or PREFS['port']
@@ -203,60 +228,69 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             self._log(f'[CrossPoint] chunk_size capped to 2048 (was {chunk_size})')
             chunk_size = 2048
         debug = PREFS['debug']
+        convert_baseline = PREFS.get('convert_baseline_jpeg', True)
 
         paths = []
         total = len(files)
-        for i, (infile, name) in enumerate(zip(files, names)):
-            if hasattr(infile, 'read'):
-                filepath = getattr(infile, 'name', None)
-                if not filepath:
-                    raise ControlError(desc='In-memory uploads are not supported')
-            else:
-                filepath = infile
-            filename = os.path.basename(name)
-            lpath = upload_path
-            if not lpath.startswith('/'):
-                lpath = '/' + lpath
-            if lpath != '/' and lpath.endswith('/'):
-                lpath = lpath[:-1]
-            if lpath == '/':
-                lpath = '/' + filename
-            else:
-                lpath = lpath + '/' + filename
+        temp_files = []
 
-            def _progress(sent, size):
-                if size > 0:
-                    self.report_progress((i + sent / float(size)) / float(total),
-                                         'Transferring books to device...')
+        try:
+            for i, (infile, name) in enumerate(zip(files, names)):
+                if hasattr(infile, 'read'):
+                    filepath = getattr(infile, 'name', None)
+                    if not filepath:
+                        raise ControlError(desc='In-memory uploads are not supported')
+                else:
+                    filepath = infile
 
-            ws_client.upload_file(
-                host,
-                port,
-                upload_path,
-                filename,
-                filepath,
-                chunk_size=chunk_size,
-                debug=debug,
-                progress_cb=_progress,
-                logger=self._log,
-            )
-            paths.append((lpath, os.path.getsize(filepath)))
+                if convert_baseline and filepath.lower().endswith('.epub'):
+                    self.report_progress(i / float(total), f'Converting images in {os.path.basename(name)}...')
+                    converted_path = self._convert_epub_to_baseline(filepath)
+                    if converted_path != filepath:
+                        temp_files.append(converted_path)
+                        filepath = converted_path
+
+                filename = os.path.basename(name)
+                lpath = upload_path
+                if not lpath.startswith('/'):
+                    lpath = '/' + lpath
+                if lpath != '/' and lpath.endswith('/'):
+                    lpath = lpath[:-1]
+                if lpath == '/':
+                    lpath = '/' + filename
+                else:
+                    lpath = lpath + '/' + filename
+
+                def _progress(sent, size):
+                    if size > 0:
+                        self.report_progress((i + sent / float(size)) / float(total),
+                                             'Transferring books to device...')
+
+                ws_client.upload_file(
+                    host,
+                    port,
+                    upload_path,
+                    filename,
+                    filepath,
+                    chunk_size=chunk_size,
+                    debug=debug,
+                    progress_cb=_progress,
+                    logger=self._log,
+                )
+                paths.append((lpath, os.path.getsize(filepath)))
+
+        finally:
+            for temp_path in temp_files:
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except Exception:
+                    pass
 
         self.report_progress(1.0, 'Transferring books to device...')
         return paths
 
     def add_books_to_metadata(self, locations, metadata, booklists):
-        metadata = iter(metadata)
-        for location in locations:
-            info = next(metadata)
-            lpath = location[0]
-            length = location[1]
-            book = Book('', lpath, size=length, other=info)
-            if booklists:
-                booklists[0].add_book(book, replace_metadata=True)
-
-    def add_books_to_metadata(self, locations, metadata, booklists):
-        # No on-device catalog to update yet.
         return
 
     def delete_books(self, paths, end_session=True):
@@ -352,7 +386,6 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         tf.flush()
         tf.seek(0)
         return tf
-
 
     def eject(self):
         self.is_connected = False

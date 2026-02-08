@@ -112,11 +112,9 @@ class WebSocketClient:
                 self._log('Server closed connection', code, reason)
                 raise WebSocketError('Connection closed')
             if opcode == 0x9:
-                # Ping -> respond with Pong
                 self._send_frame(0xA, payload)
                 continue
             if opcode == 0xA:
-                # Pong -> ignore
                 continue
             if opcode != 0x1:
                 self._log('Ignoring non-text opcode', opcode, len(payload))
@@ -282,7 +280,6 @@ def upload_file(host, port, upload_path, filename, filepath, chunk_size=16384, d
                     progress_cb(sent, size)
                 client.drain_messages()
 
-        # Wait for DONE or ERROR
         while True:
             msg = client.read_text()
             client._log('Received', msg)
