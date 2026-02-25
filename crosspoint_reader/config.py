@@ -111,11 +111,13 @@ class CrossPointConfigWidget(QWidget):
         presets_layout = QHBoxLayout(presets_widget)
         presets_layout.setContentsMargins(0, 0, 0, 0)
         
+        self.preset_buttons = []  # Track for enable/disable
         for name, value in [('Low (60%)', 60), ('Medium (75%)', 75), 
                            ('High (85%)', 85), ('Max (95%)', 95)]:
             btn = QPushButton(name)
             btn.clicked.connect(lambda checked, v=value: self._set_quality(v))
             presets_layout.addWidget(btn)
+            self.preset_buttons.append(btn)
         
         conv_layout.addRow('Presets', presets_widget)
         
@@ -198,6 +200,8 @@ class CrossPointConfigWidget(QWidget):
         """Enable/disable conversion options based on master checkbox."""
         self.jpeg_quality.setEnabled(enabled)
         self.quality_label.setEnabled(enabled)
+        for btn in self.preset_buttons:
+            btn.setEnabled(enabled)
         self.light_novel_mode.setEnabled(enabled)
         self.screen_width.setEnabled(enabled)
         self.screen_height.setEnabled(enabled)

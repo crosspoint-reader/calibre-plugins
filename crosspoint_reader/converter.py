@@ -103,8 +103,15 @@ class EpubConverter:
                     renamed[name] = new_name
             
             with zipfile.ZipFile(output_path, 'w') as zout:
+                # CRITICAL: Write mimetype FIRST per EPUB OCF spec
+                # It must be uncompressed and the first entry in the archive
+                if 'mimetype' in zin.namelist():
+                    zout.writestr('mimetype', zin.read('mimetype'), compress_type=zipfile.ZIP_STORED)
+                
                 # First pass: process images
                 for name in zin.namelist():
+                    if name == 'mimetype':
+                        continue  # Already written
                     low = name.lower()
                     
                     if re.match(r'.*\.(png|gif|webp|bmp|jpg|jpeg)$', low):
@@ -177,7 +184,8 @@ class EpubConverter:
                             re.IGNORECASE | re.DOTALL
                         )
                         
-                        def replace_block(match):
+                        # Bind loop variables via default arguments to avoid B023
+                        def replace_block(match, parts=parts, orig_name=orig_name, new_name=new_name):
                             result = []
                             for i, part in enumerate(parts):
                                 if i > 0:
@@ -197,7 +205,8 @@ class EpubConverter:
                             re.IGNORECASE
                         )
                         
-                        def replace_simple(match):
+                        # Bind loop variables via default arguments to avoid B023
+                        def replace_simple(match, parts=parts, orig_name=orig_name, new_name=new_name):
                             result = []
                             for i, part in enumerate(parts):
                                 if i > 0:
@@ -265,6 +274,8 @@ class EpubConverter:
                 
                 # Fourth pass: copy remaining files
                 for name in zin.namelist():
+                    if name == 'mimetype':
+                        continue  # Already written first
                     low = name.lower()
                     
                     # Skip already processed files
@@ -286,9 +297,7 @@ class EpubConverter:
                             text = text.replace(old_name, new_name)
                         data = text.encode('utf-8')
                     
-                    # mimetype must be stored uncompressed
-                    compress = zipfile.ZIP_STORED if name == 'mimetype' else zipfile.ZIP_DEFLATED
-                    zout.writestr(name, data, compress_type=compress)
+                    zout.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
         
         self.stats['new_size'] = os.path.getsize(output_path)
         
@@ -381,7 +390,9 @@ class EpubConverter:
             img.save(buf, 'JPEG', quality=self.jpeg_quality, progressive=False)
             return [{'data': buf.getvalue(), 'suffix': ''}]
         else:
-            # Split by width (vertical cuts), right to left for correct reading order
+            # Split by WIDTH (vertical cuts) - from RIGHT to LEFT
+            # After 90° CW rotation: right side becomes top, left becomes bottom
+            # So we cut from right to left to get top-to-bottom order
             parts = []
             max_w = self.max_width
             overlap_px = int(max_w * self.overlap)
@@ -389,7 +400,7 @@ class EpubConverter:
             num_parts = (rot_w - overlap_px + step - 1) // step  # ceil division
             
             for i in range(num_parts):
-                # Start from right side and go left
+                # Start from right side (rot_w) and go left
                 x = rot_w - max_w - (i * step)
                 if i == num_parts - 1:
                     x = 0  # Last part starts at left edge
