@@ -21,7 +21,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 1, 1)
+    version = (0, 2, 0)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -302,7 +302,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 filepath = infile
             filename = os.path.basename(name)
             subdirs = []
-            if metadata and i < len(metadata):
+            if metadata and i < len(metadata) and not PREFS['send_to_root']:
                 subdirs, filename = self._format_upload_path(metadata[i], filename)
 
             if subdirs:

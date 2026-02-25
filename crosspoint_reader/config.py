@@ -23,6 +23,7 @@ PREFS.defaults['path'] = '/'
 PREFS.defaults['chunk_size'] = 2048
 PREFS.defaults['debug'] = False
 PREFS.defaults['fetch_metadata'] = False
+PREFS.defaults['send_to_root'] = False
 
 
 class CrossPointConfigWidget(QWidget):
@@ -37,6 +38,7 @@ class CrossPointConfigWidget(QWidget):
         self.chunk_size.setRange(512, 65536)
         self.debug = QCheckBox('Enable debug logging', self)
         self.fetch_metadata = QCheckBox('Fetch metadata (slower device list)', self)
+        self.send_to_root = QCheckBox('Send to root (ignore folder template)', self)
 
         self.host.setText(PREFS['host'])
         self.port.setValue(PREFS['port'])
@@ -44,6 +46,7 @@ class CrossPointConfigWidget(QWidget):
         self.chunk_size.setValue(PREFS['chunk_size'])
         self.debug.setChecked(PREFS['debug'])
         self.fetch_metadata.setChecked(PREFS['fetch_metadata'])
+        self.send_to_root.setChecked(PREFS['send_to_root'])
 
         layout.addRow('Host', self.host)
         layout.addRow('Port', self.port)
@@ -51,6 +54,7 @@ class CrossPointConfigWidget(QWidget):
         layout.addRow('Chunk size', self.chunk_size)
         layout.addRow('', self.debug)
         layout.addRow('', self.fetch_metadata)
+        layout.addRow('', self.send_to_root)
 
         self.log_view = QPlainTextEdit(self)
         self.log_view.setReadOnly(True)
@@ -72,6 +76,7 @@ class CrossPointConfigWidget(QWidget):
         PREFS['chunk_size'] = int(self.chunk_size.value())
         PREFS['debug'] = bool(self.debug.isChecked())
         PREFS['fetch_metadata'] = bool(self.fetch_metadata.isChecked())
+        PREFS['send_to_root'] = bool(self.send_to_root.isChecked())
 
     def _refresh_logs(self):
         self.log_view.setPlainText(get_log_text())
