@@ -23,7 +23,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device with EPUB image conversion'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 2, 2)
+    version = (0, 2, 3)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -313,8 +313,8 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             if temp_path:
                 try:
                     os.remove(temp_path)
-                except Exception:
-                    pass
+                except Exception as cleanup_err:
+                    self._log(f'[CrossPoint] Failed to clean up temp file {temp_path}: {cleanup_err}')
             # Return original file if conversion fails
             return input_path
 
@@ -399,8 +399,8 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             for temp_path in temp_files:
                 try:
                     os.remove(temp_path)
-                except Exception:
-                    pass
+                except Exception as cleanup_err:
+                    self._log(f'[CrossPoint] Failed to clean up temp file {temp_path}: {cleanup_err}')
         
         return paths
 

@@ -116,31 +116,38 @@ class EpubConverter:
                     
                     if re.match(r'.*\.(png|gif|webp|bmp|jpg|jpeg)$', low):
                         data = zin.read(name)
-                        parts = self._process_image(data, name)
+                        parts, conversion_success = self._process_image(data, name)
                         
                         base_name = re.sub(r'\.[^.]+$', '', name)
                         
                         if len(parts) == 1 and parts[0]['suffix'] == '':
                             # Single image, no split
-                            new_path = renamed.get(name, re.sub(r'\.[^.]+$', '.jpg', name))
+                            if conversion_success:
+                                # Conversion succeeded - use .jpg extension
+                                new_path = renamed.get(name, re.sub(r'\.[^.]+$', '.jpg', name))
+                            else:
+                                # Conversion failed - preserve original extension
+                                new_path = name
                             zout.writestr(new_path, parts[0]['data'], 
                                          compress_type=zipfile.ZIP_DEFLATED)
                             self.stats['images_converted'] += 1
                         else:
-                            # Split image
-                            orig_name = os.path.basename(name)
-                            split_images[orig_name] = []
+                            # Split image - use full path as key to avoid basename collisions
+                            orig_basename = os.path.basename(name)
+                            orig_dir = name[:name.rfind('/') + 1] if '/' in name else ''
+                            split_images[name] = {
+                                'basename': orig_basename,
+                                'dir': orig_dir,
+                                'parts': []
+                            }
                             
                             for part in parts:
                                 part_name = os.path.basename(base_name) + part['suffix'] + '.jpg'
-                                if '/' in name:
-                                    part_path = name[:name.rfind('/') + 1] + part_name
-                                else:
-                                    part_path = part_name
+                                part_path = orig_dir + part_name
                                 
                                 zout.writestr(part_path, part['data'],
                                              compress_type=zipfile.ZIP_DEFLATED)
-                                split_images[orig_name].append({
+                                split_images[name]['parts'].append({
                                     'path': part_path,
                                     'imgName': part_name,
                                     'id': os.path.basename(base_name) + part['suffix']
@@ -173,25 +180,27 @@ class EpubConverter:
                         t = t.replace(old_name, new_name)
                     
                     # Update split image references
-                    for orig_name, parts in split_images.items():
-                        new_name = re.sub(r'\.(png|gif|webp|bmp|jpeg)$', '.jpg', orig_name, flags=re.IGNORECASE)
+                    for orig_path, split_info in split_images.items():
+                        orig_basename = split_info['basename']
+                        parts = split_info['parts']
+                        new_basename = re.sub(r'\.(png|gif|webp|bmp|jpeg)$', '.jpg', orig_basename, flags=re.IGNORECASE)
                         
                         # Replace block patterns (p/div with span and img)
                         block_pattern = re.compile(
                             r'(<(?:p|div)[^>]*>\s*<span>\s*<img[^>]*src=["\'][^"\']*(?:' + 
-                            re.escape(orig_name) + '|' + re.escape(new_name) + 
+                            re.escape(orig_basename) + '|' + re.escape(new_basename) + 
                             r')[^>]*/?>\s*</span>\s*</(?:p|div)>)',
                             re.IGNORECASE | re.DOTALL
                         )
                         
                         # Bind loop variables via default arguments to avoid B023
-                        def replace_block(match, parts=parts, orig_name=orig_name, new_name=new_name):
+                        def replace_block(match, parts=parts, orig_basename=orig_basename, new_basename=new_basename):
                             result = []
                             for i, part in enumerate(parts):
                                 if i > 0:
                                     result.append('\n')
-                                new_block = match.group(0).replace(orig_name, part['imgName'])
-                                new_block = new_block.replace(new_name, part['imgName'])
+                                new_block = match.group(0).replace(orig_basename, part['imgName'])
+                                new_block = new_block.replace(new_basename, part['imgName'])
                                 result.append(new_block)
                             return ''.join(result)
                         
@@ -200,19 +209,19 @@ class EpubConverter:
                         # Replace simple img patterns
                         simple_pattern = re.compile(
                             r'(<img[^>]*src=["\'])([^"\']*(?:' + 
-                            re.escape(orig_name) + '|' + re.escape(new_name) + 
+                            re.escape(orig_basename) + '|' + re.escape(new_basename) + 
                             r'))([^>]*/>)',
                             re.IGNORECASE
                         )
                         
                         # Bind loop variables via default arguments to avoid B023
-                        def replace_simple(match, parts=parts, orig_name=orig_name, new_name=new_name):
+                        def replace_simple(match, parts=parts, orig_basename=orig_basename, new_basename=new_basename):
                             result = []
                             for i, part in enumerate(parts):
                                 if i > 0:
                                     result.append('\n')
-                                new_src = match.group(2).replace(orig_name, part['imgName'])
-                                new_src = new_src.replace(new_name, part['imgName'])
+                                new_src = match.group(2).replace(orig_basename, part['imgName'])
+                                new_src = new_src.replace(new_basename, part['imgName'])
                                 result.append(match.group(1) + new_src + match.group(3))
                             return ''.join(result)
                         
@@ -247,8 +256,10 @@ class EpubConverter:
                     # Calculate OPF directory for relative paths
                     opf_dir = os.path.dirname(opf_path) if '/' in opf_path else ''
                     
-                    for orig_name, parts in split_images.items():
-                        orig_base = re.sub(r'\.[^.]+$', '', orig_name)
+                    for orig_path, split_info in split_images.items():
+                        orig_basename = split_info['basename']
+                        parts = split_info['parts']
+                        orig_base = re.sub(r'\.[^.]+$', '', orig_basename)
                         
                         # Update original reference to part1
                         pattern = re.compile(
@@ -333,7 +344,8 @@ class EpubConverter:
         """
         Process a single image.
         
-        Returns list of {'data': bytes, 'suffix': str}
+        Returns tuple: (list of {'data': bytes, 'suffix': str}, bool success)
+        If success is False, the original data is returned unchanged.
         """
         try:
             img = Image.open(io.BytesIO(data))
@@ -357,14 +369,14 @@ class EpubConverter:
             needs_rotation = is_horizontal and exceeds_screen
             
             if needs_rotation and self.enable_split_rotate:
-                return self._process_split_rotate(img, orig_w, orig_h)
+                return self._process_split_rotate(img, orig_w, orig_h), True
             else:
-                return self._process_normal(img, orig_w, orig_h)
+                return self._process_normal(img, orig_w, orig_h), True
             
         except Exception as e:
             self._log(f"Error processing {name}: {e}")
-            # Return original data as fallback
-            return [{'data': data, 'suffix': ''}]
+            # Return original data as fallback with success=False
+            return [{'data': data, 'suffix': ''}], False
     
     def _process_normal(self, img, orig_w, orig_h):
         """Process image without rotation/split."""

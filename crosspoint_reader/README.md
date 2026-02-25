@@ -2,7 +2,7 @@
 
 A Calibre device driver plugin for CrossPoint e-readers with built-in EPUB image conversion for optimal e-reader compatibility.
 
-## Version 0.2.2
+## Version 0.2.3
 
 ## Features
 
@@ -91,6 +91,12 @@ Automatically converts EPUB images before uploading for maximum e-reader compati
 This plugin is provided as-is for use with CrossPoint Reader devices.
 
 ## Changelog
+
+### v0.2.3
+- Fixed: Basename collision when EPUBs have duplicate filenames in different folders (e.g., `Images/cover.png` and `assets/cover.png`) - now uses full path as key
+- Fixed: Split Overlap control now disabled when Light Novel Mode is off (reflects actual dependency)
+- Fixed: Failed image conversions now preserve original extension instead of writing invalid `.jpg` files
+- Fixed: Temp file cleanup errors are now logged instead of silently ignored
 
 ### v0.2.2
 - Changed: Conversion disabled by default (opt-in for safe upgrades from v0.1.x)

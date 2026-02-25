@@ -174,6 +174,10 @@ class CrossPointConfigWidget(QWidget):
         self.enable_conversion.toggled.connect(self._update_conversion_enabled)
         self._update_conversion_enabled(self.enable_conversion.isChecked())
         
+        # Gate split_overlap on light_novel_mode
+        self.light_novel_mode.toggled.connect(self._update_split_overlap_enabled)
+        self._update_split_overlap_enabled(self.light_novel_mode.isChecked())
+        
         # Log section
         log_group = QGroupBox("Debug Log")
         log_layout = QVBoxLayout()
@@ -205,7 +209,14 @@ class CrossPointConfigWidget(QWidget):
         self.light_novel_mode.setEnabled(enabled)
         self.screen_width.setEnabled(enabled)
         self.screen_height.setEnabled(enabled)
-        self.split_overlap.setEnabled(enabled)
+        # split_overlap depends on both conversion enabled AND light_novel_mode
+        self._update_split_overlap_enabled(self.light_novel_mode.isChecked())
+    
+    def _update_split_overlap_enabled(self, light_novel_enabled):
+        """Enable/disable split overlap based on Light Novel Mode."""
+        # split_overlap is only enabled if BOTH conversion AND light_novel_mode are on
+        conversion_enabled = self.enable_conversion.isChecked()
+        self.split_overlap.setEnabled(conversion_enabled and light_novel_enabled)
 
     def save(self):
         # Connection settings
