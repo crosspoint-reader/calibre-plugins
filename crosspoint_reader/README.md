@@ -50,7 +50,7 @@ Automatically converts EPUB images before uploading for maximum e-reader compati
 1. Connect your CrossPoint Reader to the same WiFi network as your computer
 2. The device should appear automatically in Calibre's device list
 3. Configure settings via Preferences → Plugins → CrossPoint Reader → Customize plugin
-4. Send books to device as usual - images will be automatically converted
++4. Send books to device as usual — images are converted only when “Enable EPUB image conversion” is turned on
 
 ## What the Converter Does
 
