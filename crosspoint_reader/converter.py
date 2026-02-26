@@ -6,7 +6,7 @@ for e-reader compatibility.
 
 Features:
 - Convert PNG/GIF/WebP/BMP to baseline JPEG
-- Fix SVG covers for e-readers
+- Fix ALL SVG-wrapped images for e-readers (not just covers)
 - Scale large images to fit screen
 - Light Novel Mode: rotate wide images and split into pages
 - Configurable JPEG quality
@@ -336,7 +336,7 @@ class EpubConverter:
         if self.stats['images_split'] > 0:
             self._log(f"Created {self.stats['images_split']} additional pages from splits")
         if self.stats['svg_covers_fixed'] > 0:
-            self._log(f"Fixed {self.stats['svg_covers_fixed']} SVG cover(s)")
+            self._log(f"Fixed {self.stats['svg_covers_fixed']} SVG image(s)")
         
         return output_path
     
@@ -441,28 +441,54 @@ class EpubConverter:
             return parts
     
     def _fix_svg_cover(self, content):
-        """Fix SVG cover to regular HTML img tag."""
+        """Fix ALL SVG-wrapped images to regular HTML img tags.
+
+        Replaces <svg><image xlink:href="..."/></svg> with <img src="..."/>.
+        Works for all SVG images, not just covers.
+        """
         if '<svg' not in content or 'xlink:href' not in content:
             return {'content': content, 'fixed': False}
-        
-        if ('calibre:cover' not in content and 
-            'name="cover"' not in content and 
-            '<title>Cover</title>' not in content):
-            return {'content': content, 'fixed': False}
-        
-        match = re.search(r'xlink:href=["\']([^"\']+)["\']', content)
-        if not match:
-            return {'content': content, 'fixed': False}
-        
-        img_src = match.group(1)
-        new_content = f'''<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="en" xml:lang="en">
-<head><meta content="text/html; charset=UTF-8" http-equiv="default-style"/><title>Cover</title></head>
-<body><section epub:type="cover"><img alt="Cover" src="{img_src}"/></section></body>
-</html>'''
-        
-        return {'content': new_content, 'fixed': True}
+
+        fixed_count = 0
+        result = content
+
+        # Pattern 1: SVG with xlink:href attribute
+        svg_pattern = re.compile(
+            r'<svg[^>]*>.*?<image[^>]*xlink:href\s*=\s*["\']([^"\']+)["\'][^>]*/?>.*?</svg>',
+            re.DOTALL | re.IGNORECASE
+        )
+
+        for match in svg_pattern.finditer(result):
+            svg_tag = match.group(0)
+            image_path = match.group(1)
+
+            # Extract title if present for alt text
+            title_match = re.search(r'<title[^>]*>([^<]*)</title>', svg_tag, re.IGNORECASE)
+            alt_text = title_match.group(1).strip() if title_match else ''
+
+            # Extract class from SVG if present
+            class_match = re.search(r'class=["\']([^"\']*)["\']', svg_tag, re.IGNORECASE)
+            svg_class = f' class="{class_match.group(1)}"' if class_match else ''
+
+            # Build replacement img tag
+            img_tag = f'<img src="{image_path}" alt="{alt_text}"{svg_class}/>'
+            result = result.replace(svg_tag, img_tag)
+            fixed_count += 1
+
+        # Pattern 2: SVG with href attribute (without xlink:)
+        svg_pattern2 = re.compile(
+            r'<svg[^>]*>\s*<image[^>]*href=["\']([^"\']+)["\'][^>]*/?>\s*</svg>',
+            re.DOTALL | re.IGNORECASE
+        )
+
+        for match in svg_pattern2.finditer(result):
+            svg_tag = match.group(0)
+            image_path = match.group(1)
+            img_tag = f'<img src="{image_path}" alt=""/>'
+            result = result.replace(svg_tag, img_tag)
+            fixed_count += 1
+
+        return {'content': result, 'fixed': fixed_count > 0}
     
     def _ensure_cover_meta(self, content):
         """Ensure OPF has correct cover meta tag."""

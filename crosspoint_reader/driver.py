@@ -23,7 +23,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device with EPUB image conversion'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 2, 3)
+    version = (0, 2, 4)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
