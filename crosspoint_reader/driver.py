@@ -9,19 +9,21 @@ from calibre.devices.interface import DevicePlugin
 from calibre.devices.usbms.deviceconfig import DeviceConfig
 from calibre.devices.usbms.books import Book, BookList
 from calibre.ebooks.metadata.book.base import Metadata
+from calibre.ptempfile import PersistentTemporaryFile
 
 from . import ws_client
 from .config import CrossPointConfigWidget, PREFS
+from .converter import EpubConverter
 from .log import add_log
 
 
 class CrossPointDevice(DeviceConfig, DevicePlugin):
     name = 'CrossPoint Reader'
     gui_name = 'CrossPoint Reader'
-    description = 'CrossPoint Reader wireless device'
+    description = 'CrossPoint Reader wireless device with EPUB image conversion'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 1, 1)
+    version = (0, 2, 4)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -274,6 +276,48 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             return '/' + subdir_path
         return parent_path + '/' + subdir_path
 
+    def _convert_epub(self, input_path):
+        """Convert EPUB images to baseline JPEG format.
+        
+        Returns path to converted file (may be a temp file).
+        """
+        if not PREFS['enable_conversion']:
+            return input_path
+        
+        temp_path = None
+        try:
+            # Create converter with settings from preferences
+            converter = EpubConverter(
+                jpeg_quality=PREFS['jpeg_quality'],
+                max_width=PREFS['screen_width'],
+                max_height=PREFS['screen_height'],
+                enable_split_rotate=PREFS['light_novel_mode'],
+                overlap=PREFS['split_overlap'] / 100.0,
+                logger=self._log,
+            )
+            
+            # Create temp file for converted EPUB
+            temp_file = PersistentTemporaryFile(suffix='_baseline.epub')
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            # Convert
+            self._log(f'[CrossPoint] Converting: {os.path.basename(input_path)}')
+            converter.convert_epub(input_path, temp_path)
+            
+            return temp_path
+            
+        except Exception as exc:
+            self._log(f'[CrossPoint] Conversion failed: {exc}')
+            # Clean up temp file on failure
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except Exception as cleanup_err:
+                    self._log(f'[CrossPoint] Failed to clean up temp file {temp_path}: {cleanup_err}')
+            # Return original file if conversion fails
+            return input_path
+
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         host = self.device_host or PREFS['host']
         port = self.device_port or PREFS['port']
@@ -284,6 +328,10 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             chunk_size = 2048
         debug = PREFS['debug']
 
+        # Validate input lengths
+        if len(files) != len(names):
+            raise ControlError(desc=f'Mismatch: {len(files)} files but {len(names)} names')
+
         # Normalize base upload path
         base_path = upload_path
         if not base_path.startswith('/'):
@@ -293,47 +341,67 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
 
         paths = []
         total = len(files)
-        for i, (infile, name) in enumerate(zip(files, names)):
-            if hasattr(infile, 'read'):
-                filepath = getattr(infile, 'name', None)
-                if not filepath:
-                    raise ControlError(desc='In-memory uploads are not supported')
-            else:
-                filepath = infile
-            filename = os.path.basename(name)
-            subdirs = []
-            if metadata and i < len(metadata):
-                subdirs, filename = self._format_upload_path(metadata[i], filename)
+        temp_files = []  # Track temp files for cleanup
+        
+        try:
+            for i, (infile, name) in enumerate(zip(files, names)):
+                if hasattr(infile, 'read'):
+                    filepath = getattr(infile, 'name', None)
+                    if not filepath:
+                        raise ControlError(desc='In-memory uploads are not supported')
+                else:
+                    filepath = infile
+                
+                # Convert EPUB if enabled
+                converted_path = self._convert_epub(filepath)
+                if converted_path != filepath:
+                    temp_files.append(converted_path)
+                    filepath = converted_path
+                
+                filename = os.path.basename(name)
+                subdirs = []
+                if metadata and i < len(metadata):
+                    subdirs, filename = self._format_upload_path(metadata[i], filename)
 
-            if subdirs:
-                target_dir = self._ensure_dir(base_path, subdirs)
-            else:
-                target_dir = base_path
+                if subdirs:
+                    target_dir = self._ensure_dir(base_path, subdirs)
+                else:
+                    target_dir = base_path
 
-            if target_dir == '/':
-                lpath = '/' + filename
-            else:
-                lpath = target_dir + '/' + filename
+                if target_dir == '/':
+                    lpath = '/' + filename
+                else:
+                    lpath = target_dir + '/' + filename
 
-            def _progress(sent, size):
-                if size > 0:
-                    self.report_progress((i + sent / float(size)) / float(total),
-                                         'Transferring books to device...')
+                # Bind loop variables via default arguments to avoid closure bug
+                def _progress(sent, size, i=i, total=total):
+                    if size > 0:
+                        self.report_progress((i + sent / float(size)) / float(total),
+                                             'Transferring books to device...')
 
-            ws_client.upload_file(
-                host,
-                port,
-                target_dir,
-                filename,
-                filepath,
-                chunk_size=chunk_size,
-                debug=debug,
-                progress_cb=_progress,
-                logger=self._log,
-            )
-            paths.append((lpath, os.path.getsize(filepath)))
+                ws_client.upload_file(
+                    host,
+                    port,
+                    target_dir,
+                    filename,
+                    filepath,
+                    chunk_size=chunk_size,
+                    debug=debug,
+                    progress_cb=_progress,
+                    logger=self._log,
+                )
+                paths.append((lpath, os.path.getsize(filepath)))
 
-        self.report_progress(1.0, 'Transferring books to device...')
+            self.report_progress(1.0, 'Transferring books to device...')
+            
+        finally:
+            # Clean up temp files
+            for temp_path in temp_files:
+                try:
+                    os.remove(temp_path)
+                except Exception as cleanup_err:
+                    self._log(f'[CrossPoint] Failed to clean up temp file {temp_path}: {cleanup_err}')
+        
         return paths
 
     def add_books_to_metadata(self, locations, metadata, booklists):
