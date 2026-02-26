@@ -5,6 +5,7 @@ from qt.core import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
@@ -47,6 +48,12 @@ class CrossPointConfigWidget(QWidget):
 
         layout.addRow('Host', self.host)
         layout.addRow('Port', self.port)
+
+        notice = QLabel('Host and port settings are fallback values used only when the device is not auto-discoverable by UDP broadcast.')
+        notice.setWordWrap(True)
+        notice.setStyleSheet('color: gray; font-style: italic;')
+        layout.addRow('', notice)
+
         layout.addRow('Upload path', self.path)
         layout.addRow('Chunk size', self.chunk_size)
         layout.addRow('', self.debug)
