@@ -229,6 +229,7 @@ def discover_device(timeout=2.0, debug=False, logger=None, extra_hosts=None):
         _log(logger, debug, f'[CrossPoint WS] discovery subnet broadcast {bcast}')
         for port in ports:
             targets.append((bcast, port))
+    # 255.255.255.255 as fallback — works on Linux/Windows, silently fails on macOS
     for port in ports:
         targets.append(('255.255.255.255', port))
     for host in extra_hosts or []:
