@@ -189,6 +189,21 @@ def _broadcast_from_host(host):
     return '.'.join(parts)
 
 
+def _local_broadcast_addrs():
+    addrs = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip.startswith('127.'):
+                continue
+            bcast = _broadcast_from_host(ip)
+            if bcast:
+                addrs.add(bcast)
+    except Exception:
+        pass
+    return addrs
+
+
 def discover_device(timeout=2.0, debug=False, logger=None, extra_hosts=None):
     ports = [8134, 54982, 48123, 39001, 44044, 59678]
     local_port = 0
@@ -210,6 +225,10 @@ def discover_device(timeout=2.0, debug=False, logger=None, extra_hosts=None):
         pass
 
     targets = []
+    for bcast in _local_broadcast_addrs():
+        _log(logger, debug, f'[CrossPoint WS] discovery subnet broadcast {bcast}')
+        for port in ports:
+            targets.append((bcast, port))
     for port in ports:
         targets.append(('255.255.255.255', port))
     for host in extra_hosts or []:
