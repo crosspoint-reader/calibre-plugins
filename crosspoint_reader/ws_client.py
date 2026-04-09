@@ -260,6 +260,9 @@ def discover_device(timeout=2.0, debug=False, logger=None, extra_hosts=None):
                 text = data.decode('utf-8', 'ignore')
             except Exception:
                 continue
+            if not text.startswith('crosspoint'):
+                _log(logger, debug, f'[CrossPoint WS] discovery ignoring non-crosspoint response: {text}')
+                continue
             semi = text.find(';')
             port = 81
             if semi != -1:
