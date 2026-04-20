@@ -21,7 +21,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 2, 0)
+    version = (0, 1, 3)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -136,7 +136,8 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     def _http_post_form(self, path, data, timeout=5):
         url = self._http_base() + path
         body = urllib.parse.urlencode(data).encode('utf-8')
-        req = urllib.request.Request(url, data=body, method='POST')
+        req = urllib.request.Request(url, data=body, method='POST',
+                                     headers={'Content-Type': 'application/x-www-form-urlencoded'})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.status, resp.read().decode('utf-8', 'ignore')
@@ -250,7 +251,8 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         """
         url = self._http_base() + '/mkdir'
         body = urllib.parse.urlencode({'name': name, 'path': path}).encode('utf-8')
-        req = urllib.request.Request(url, data=body, method='POST')
+        req = urllib.request.Request(url, data=body, method='POST',
+                                     headers={'Content-Type': 'application/x-www-form-urlencoded'})
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 resp.read()
@@ -353,11 +355,22 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
 
 
     def delete_books(self, paths, end_session=True):
-        for path in paths:
-            status, body = self._http_post_form('/delete', {'path': path, 'type': 'file'})
-            if status != 200:
-                raise ControlError(desc=f'Delete failed for {path}: {body}')
-            self._log(f'[CrossPoint] deleted {path}')
+        import json as _json
+        self._log(f'[CrossPoint] deleting {len(paths)} books: {paths}')
+        url = self._http_base() + '/delete'
+        # Server expects form field 'paths' containing a JSON array string
+        body = urllib.parse.urlencode({'paths': _json.dumps(list(paths))}).encode('utf-8')
+        req = urllib.request.Request(url, data=body, method='POST',
+                                    headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                self._log(f'[CrossPoint] delete OK: {resp.status}')
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode('utf-8', 'ignore') if exc.fp else ''
+            self._log(f'[CrossPoint] delete error {exc.code}: {err_body}')
+            raise ControlError(desc=f'Delete failed: {exc.code} {err_body}')
+        except Exception as exc:
+            raise ControlError(desc=f'Delete failed: {exc}')
 
     def remove_books_from_metadata(self, paths, booklists):
         def norm(p):
