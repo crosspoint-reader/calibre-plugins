@@ -304,7 +304,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 filepath = infile
             filename = os.path.basename(name)
             subdirs = []
-            if metadata and i < len(metadata):
+            if metadata and i < len(metadata) and not PREFS['send_to_root']:
                 subdirs, filename = self._format_upload_path(metadata[i], filename)
 
             if subdirs:
