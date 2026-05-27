@@ -21,15 +21,15 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 1, 4)
+    version = (0, 1, 5)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
     PRODUCT_ID = [0xFFFF]
     BCD = [0xFFFF]
 
-    FORMATS = ['epub']
-    ALL_FORMATS = ['epub']
+    FORMATS = ['epub', 'xtc']
+    ALL_FORMATS = ['epub', 'xtc']
     SUPPORTS_SUB_DIRS = True
     MUST_READ_METADATA = False
     MANAGES_DEVICE_PRESENCE = True
@@ -151,7 +151,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         config_widget.save()
 
     def _list_files_recursive(self, path='/'):
-        """Return a flat list of (lpath, size) for all EPUB files on device."""
+        """Return a flat list of (lpath, size) for all EPUB and XTC files on device."""
         results = []
         try:
             entries = self._http_get_json('/api/files', params={'path': path})
@@ -168,7 +168,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 entry_path = path + '/' + name
             if entry.get('isDirectory'):
                 results.extend(self._list_files_recursive(entry_path))
-            elif entry.get('isEpub'):
+            elif entry.get('isEpub') or entry.get('isXTC'):
                 results.append((entry_path, entry.get('size', 0)))
         return results
 

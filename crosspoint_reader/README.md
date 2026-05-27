@@ -1,7 +1,7 @@
 # CrossPoint Reader Calibre Plugin
 
 This plugin adds CrossPoint Reader as a wireless device in Calibre. It uploads
-EPUB files over WebSocket to the CrossPoint web server.
+EPUB and XTC files over WebSocket to the CrossPoint web server.
 
 Protocol:
 - Connect to ws://<host>:<port>/
