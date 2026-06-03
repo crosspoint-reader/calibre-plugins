@@ -25,25 +25,30 @@ PREFS.defaults['chunk_size'] = 2048
 PREFS.defaults['debug'] = False
 PREFS.defaults['fetch_metadata'] = False
 PREFS.defaults['send_to_root'] = False
+PREFS.defaults['upload_template'] = ''
 
 
 class CrossPointConfigWidget(QWidget):
     def __init__(self):
         super().__init__()
         layout = QFormLayout(self)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self.host = QLineEdit(self)
         self.port = QSpinBox(self)
         self.port.setRange(1, 65535)
         self.path = QLineEdit(self)
+        self.upload_template = QLineEdit(self)
         self.chunk_size = QSpinBox(self)
         self.chunk_size.setRange(512, 65536)
         self.debug = QCheckBox('Enable debug logging', self)
         self.fetch_metadata = QCheckBox('Fetch metadata (slower device list)', self)
-        self.send_to_root = QCheckBox('Send to root (ignore folder template)', self)
+        self.send_to_root = QCheckBox('Send to root (ignore any template)', self)
 
         self.host.setText(PREFS['host'])
         self.port.setValue(PREFS['port'])
         self.path.setText(PREFS['path'])
+        self.upload_template.setText(PREFS['upload_template'])
+        self.upload_template.setPlaceholderText("Leave blank to use Calibre's send-to-device template")
         self.chunk_size.setValue(PREFS['chunk_size'])
         self.debug.setChecked(PREFS['debug'])
         self.fetch_metadata.setChecked(PREFS['fetch_metadata'])
@@ -58,6 +63,7 @@ class CrossPointConfigWidget(QWidget):
         layout.addRow('', notice)
 
         layout.addRow('Upload path', self.path)
+        layout.addRow('Upload template', self.upload_template)
         layout.addRow('Chunk size', self.chunk_size)
         layout.addRow('', self.debug)
         layout.addRow('', self.fetch_metadata)
@@ -80,6 +86,7 @@ class CrossPointConfigWidget(QWidget):
         PREFS['host'] = self.host.text().strip() or PREFS.defaults['host']
         PREFS['port'] = int(self.port.value())
         PREFS['path'] = self.path.text().strip() or PREFS.defaults['path']
+        PREFS['upload_template'] = self.upload_template.text().strip()
         PREFS['chunk_size'] = int(self.chunk_size.value())
         PREFS['debug'] = bool(self.debug.isChecked())
         PREFS['fetch_metadata'] = bool(self.fetch_metadata.isChecked())
