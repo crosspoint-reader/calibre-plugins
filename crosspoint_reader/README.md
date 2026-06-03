@@ -15,6 +15,7 @@ Default settings:
 - Host fallback: 192.168.4.1
 - Port: 81
 - Upload path: /
+- Upload template: blank, which uses Calibre's send-to-device template
 
 Install:
 1. Download the latest release from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases) (or zip the contents of this directory).
