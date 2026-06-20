@@ -35,9 +35,12 @@ The target screen size comes from the device profile — **X4 = 480×800**,
 endpoint on connect (matching the web UI), or can be set manually
 (Auto / X4 / X3) in the plugin settings.
 
-After each transfer a summary dialog lists what changed per book (before→after
-size, images processed, fixes, per-image steps). If optimization fails for a
-book, the original is sent unchanged so a transfer is never blocked.
+When a transfer starts, a live dialog opens and streams the optimization steps
+as they happen (per book: each image's before→after size, fixes, and upload),
+then finishes with the totals. When several books are sent at once they are
+processed in turn in the same dialog, which ends with combined totals. If
+optimization fails for a book, the original is sent unchanged so a transfer is
+never blocked.
 
 ### Using the optimizer
 
@@ -55,10 +58,12 @@ book, the original is sent unchanged so a transfer is never blocked.
    settings take effect.
 5. Send a book to the device as usual (right-click → *Send to device*, or the
    **Send to device** toolbar button). The EPUB is optimized just before upload.
-6. When the transfer finishes, a **summary dialog** opens showing, per book, the
-   before→after size, how many images were processed/cropped, and the fixes
-   applied. The same steps are also written to the plugin **Log** (visible in the
-   config dialog when **Enable debug logging** is on).
+6. As the transfer runs, a **live dialog** opens and streams each step — per
+   book, the images processed/cropped and fixes applied — and ends with the
+   combined totals (and a **Close** button). Selecting multiple books processes
+   them one after another in the same dialog. The same steps are also written to
+   the plugin **Log** (visible in the config dialog when **Enable debug logging**
+   is on).
 
 To turn the feature off, uncheck **Optimize EPUBs before transfer** — books are
 then sent exactly as Calibre exports them.
