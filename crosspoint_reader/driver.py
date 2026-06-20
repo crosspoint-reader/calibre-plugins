@@ -21,7 +21,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 1, 4)
+    version = (0, 2, 0)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -44,6 +44,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         self.is_connected = False
         self.device_host = None
         self.device_port = None
+        self.device_model = None  # 'X3' | 'X4' from /api/status
         self.last_discovery = 0.0
         self.report_progress = lambda x, y: x
         self._debug_enabled = False
@@ -86,10 +87,25 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             self.device_host = host
             self.device_port = port
             self.is_connected = True
+            self._detect_device_model()
             return self
         if debug:
             self._log('[CrossPoint] discovery failed')
         return None
+
+    def _detect_device_model(self):
+        """Query /api/status for the device model (X3/X4), like the web UI."""
+        try:
+            status = self._http_get_json('/api/status', timeout=4)
+            model = (status or {}).get('device')
+            if model in ('X3', 'X4'):
+                self.device_model = model
+                self._log(f'[CrossPoint] detected device model: {model}')
+            else:
+                self._log('[CrossPoint] /api/status returned no device model')
+        except Exception as exc:
+            self._log(f'[CrossPoint] device model detection failed: {exc}')
+        return self.device_model
 
     def open(self, connected_device, library_uuid):
         if not self.is_connected:
@@ -145,6 +161,12 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             raise ControlError(desc=f'HTTP request failed: {exc}')
 
     def config_widget(self):
+        # Runs on the GUI thread; ensure the summary bridge exists (idempotent).
+        try:
+            from . import summary as summary_ui
+            summary_ui.ensure_bridge()
+        except Exception:
+            pass
         return CrossPointConfigWidget()
 
     def save_settings(self, config_widget):
@@ -293,7 +315,23 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         if base_path != '/' and base_path.endswith('/'):
             base_path = base_path[:-1]
 
+        optimize_enabled = bool(PREFS['optimize'])
+        opt_profile = None
+        summary_ui = None
+        if optimize_enabled:
+            from .optimizer import resolve_profile
+            _, opt_profile = resolve_profile(PREFS['device_target'], self.device_model)
+            # Open the live optimizer dialog up-front so the user sees steps stream.
+            try:
+                from . import summary as summary_ui
+                summary_ui.begin('Optimizing %d book(s) for %s…' % (
+                    len(files), opt_profile['label']))
+            except Exception as exc:
+                summary_ui = None
+                self._log(f'[CrossPoint] could not open optimizer dialog: {exc}')
+
         paths = []
+        summaries = []
         total = len(files)
         for i, (infile, name) in enumerate(zip(files, names)):
             if hasattr(infile, 'read'):
@@ -317,26 +355,98 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             else:
                 lpath = target_dir + '/' + filename
 
+            # Optionally optimize the EPUB to a temp file before uploading.
+            send_path = filepath
+            opt_temp = None
+            if optimize_enabled and filepath.lower().endswith('.epub'):
+                step_cb = summary_ui.step if summary_ui is not None else None
+                opt_temp, summary = self._optimize_book(filepath, opt_profile,
+                                                        step_cb=step_cb)
+                if opt_temp is not None:
+                    send_path = opt_temp
+                if summary is not None:
+                    summaries.append(summary)
+                if summary_ui is not None:
+                    summary_ui.step('SEND', 'Uploading %s …' % filename)
+
             def _progress(sent, size):
                 if size > 0:
                     self.report_progress((i + sent / float(size)) / float(total),
                                          'Transferring books to device...')
 
-            ws_client.upload_file(
-                host,
-                port,
-                target_dir,
-                filename,
-                filepath,
-                chunk_size=chunk_size,
-                debug=debug,
-                progress_cb=_progress,
-                logger=self._log,
-            )
-            paths.append((lpath, os.path.getsize(filepath)))
+            try:
+                ws_client.upload_file(
+                    host,
+                    port,
+                    target_dir,
+                    filename,
+                    send_path,
+                    chunk_size=chunk_size,
+                    debug=debug,
+                    progress_cb=_progress,
+                    logger=self._log,
+                )
+                paths.append((lpath, os.path.getsize(send_path)))
+            finally:
+                if opt_temp is not None:
+                    try:
+                        os.remove(opt_temp)
+                    except OSError:
+                        pass
 
         self.report_progress(1.0, 'Transferring books to device...')
+
+        if summary_ui is not None:
+            try:
+                summary_ui.finish({
+                    'profile': opt_profile['label'] if opt_profile else '?',
+                    'books': summaries,
+                })
+            except Exception as exc:
+                self._log(f'[CrossPoint] could not finalize optimizer dialog: {exc}')
+
         return paths
+
+    def _optimize_book(self, filepath, profile, step_cb=None):
+        """Optimize an EPUB to a temp file. Returns (temp_path_or_None, summary_or_None).
+
+        ``step_cb(tag, message)`` (optional) streams each step to the live dialog.
+        On any failure the original file is used (temp_path is None) so a transfer
+        is never blocked by optimization.
+        """
+        from calibre.ptempfile import PersistentTemporaryFile
+        from .optimizer import optimize_epub, Options
+
+        opts = Options(
+            quality=PREFS['optimize_quality'],
+            grayscale=PREFS['optimize_grayscale'],
+            auto_crop=PREFS['optimize_auto_crop'],
+        )
+
+        def _step(tag, message):
+            self._log(f'[CrossPoint][opt] {tag}: {message}')
+            if step_cb is not None:
+                try:
+                    step_cb(tag, message)
+                except Exception:
+                    pass
+
+        out_path = None
+        try:
+            tf = PersistentTemporaryFile(suffix='.epub')
+            out_path = tf.name
+            tf.close()
+            summary = optimize_epub(filepath, out_path, profile, opts, log_fn=_step)
+            return out_path, summary
+        except Exception as exc:
+            self._log(f'[CrossPoint] optimization failed for {os.path.basename(filepath)}: '
+                      f'{exc} (sending original)')
+            if out_path:
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+            return None, None
 
     def add_books_to_metadata(self, locations, metadata, booklists):
         self._log(f'[CrossPoint] add_books_to_metadata: {len(locations)} locations, '

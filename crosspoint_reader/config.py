@@ -1,9 +1,11 @@
 from calibre.utils.config import JSONConfig
 from qt.core import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -25,6 +27,12 @@ PREFS.defaults['chunk_size'] = 2048
 PREFS.defaults['debug'] = False
 PREFS.defaults['fetch_metadata'] = False
 PREFS.defaults['send_to_root'] = False
+# Optimizer settings (mirrors the CrossPoint web server optimizer).
+PREFS.defaults['optimize'] = False
+PREFS.defaults['optimize_grayscale'] = True
+PREFS.defaults['optimize_auto_crop'] = False
+PREFS.defaults['optimize_quality'] = 85
+PREFS.defaults['device_target'] = 'auto'  # 'auto' | 'X4' | 'X3'
 
 
 class CrossPointConfigWidget(QWidget):
@@ -41,6 +49,18 @@ class CrossPointConfigWidget(QWidget):
         self.fetch_metadata = QCheckBox('Fetch metadata (slower device list)', self)
         self.send_to_root = QCheckBox('Send to root (ignore folder template)', self)
 
+        # Optimizer controls.
+        self.optimize = QCheckBox('Optimize EPUBs before transfer', self)
+        self.optimize_grayscale = QCheckBox('Convert images to grayscale', self)
+        self.optimize_auto_crop = QCheckBox('Auto-crop uniform margins', self)
+        self.optimize_quality = QSpinBox(self)
+        self.optimize_quality.setRange(1, 100)
+        self.optimize_quality.setSuffix('%')
+        self.device_target = QComboBox(self)
+        self.device_target.addItem('Auto-detect', 'auto')
+        self.device_target.addItem('X4 (480×800)', 'X4')
+        self.device_target.addItem('X3 (528×792)', 'X3')
+
         self.host.setText(PREFS['host'])
         self.port.setValue(PREFS['port'])
         self.path.setText(PREFS['path'])
@@ -48,6 +68,12 @@ class CrossPointConfigWidget(QWidget):
         self.debug.setChecked(PREFS['debug'])
         self.fetch_metadata.setChecked(PREFS['fetch_metadata'])
         self.send_to_root.setChecked(PREFS['send_to_root'])
+        self.optimize.setChecked(PREFS['optimize'])
+        self.optimize_grayscale.setChecked(PREFS['optimize_grayscale'])
+        self.optimize_auto_crop.setChecked(PREFS['optimize_auto_crop'])
+        self.optimize_quality.setValue(PREFS['optimize_quality'])
+        idx = self.device_target.findData(PREFS['device_target'])
+        self.device_target.setCurrentIndex(idx if idx >= 0 else 0)
 
         layout.addRow('Host', self.host)
         layout.addRow('Port', self.port)
@@ -62,6 +88,28 @@ class CrossPointConfigWidget(QWidget):
         layout.addRow('', self.debug)
         layout.addRow('', self.fetch_metadata)
         layout.addRow('', self.send_to_root)
+
+        sep = QFrame(self)
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addRow(sep)
+
+        opt_heading = QLabel('<b>Optimizer</b>')
+        layout.addRow(opt_heading)
+        opt_notice = QLabel('Mirrors the CrossPoint web optimizer: resizes images to the '
+                            'screen, converts to grayscale and re-encodes as JPEG, then '
+                            'rewrites the EPUB. A summary is shown after each transfer.')
+        opt_notice.setWordWrap(True)
+        opt_notice.setStyleSheet('color: gray; font-style: italic;')
+        layout.addRow('', opt_notice)
+        layout.addRow('', self.optimize)
+        layout.addRow('Device target', self.device_target)
+        layout.addRow('JPEG quality', self.optimize_quality)
+        layout.addRow('', self.optimize_grayscale)
+        layout.addRow('', self.optimize_auto_crop)
+
+        self.optimize.toggled.connect(self._sync_optimizer_enabled)
+        self._sync_optimizer_enabled(self.optimize.isChecked())
 
         self.log_view = QPlainTextEdit(self)
         self.log_view.setReadOnly(True)
@@ -84,6 +132,16 @@ class CrossPointConfigWidget(QWidget):
         PREFS['debug'] = bool(self.debug.isChecked())
         PREFS['fetch_metadata'] = bool(self.fetch_metadata.isChecked())
         PREFS['send_to_root'] = bool(self.send_to_root.isChecked())
+        PREFS['optimize'] = bool(self.optimize.isChecked())
+        PREFS['optimize_grayscale'] = bool(self.optimize_grayscale.isChecked())
+        PREFS['optimize_auto_crop'] = bool(self.optimize_auto_crop.isChecked())
+        PREFS['optimize_quality'] = int(self.optimize_quality.value())
+        PREFS['device_target'] = self.device_target.currentData()
+
+    def _sync_optimizer_enabled(self, enabled):
+        for w in (self.optimize_grayscale, self.optimize_auto_crop,
+                  self.optimize_quality, self.device_target):
+            w.setEnabled(enabled)
 
     def _refresh_logs(self):
         self.log_view.setPlainText(get_log_text())

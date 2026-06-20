@@ -8,7 +8,9 @@ Calibre plugins for [CrossPoint Reader](https://github.com/crosspoint-reader).
 
 A wireless device plugin that uploads EPUB files to CrossPoint Reader over WebSocket. The plugin auto-discovers devices on the local network via UDP broadcast.
 
-See [crosspoint_reader/README.md](crosspoint_reader/README.md) for protocol details and configuration.
+It can also **optimize EPUBs before transfer** — mirroring the optimizer built into the CrossPoint web server — by resizing images to the device screen (X4 480×800 / X3 528×792, auto-detected), converting them to grayscale JPEG, and rewriting the container. Enable it in the plugin's settings; see the [usage instructions](crosspoint_reader/README.md#using-the-optimizer).
+
+See [crosspoint_reader/README.md](crosspoint_reader/README.md) for protocol details, the optimizer, and configuration.
 
 ## Installation
 
