@@ -21,7 +21,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 2, 1)
+    version = (0, 2, 2)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -464,12 +464,32 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 self._log(f'[CrossPoint] WARNING: booklists empty, could not add {lpath}')
 
 
+    @staticmethod
+    def _normalize_device_path(p):
+        """Normalize a path to the device's forward-slash, leading-slash form.
+
+        Calibre stores device book paths using the local os.sep, so on Windows a
+        freshly-sent book's path arrives here with backslashes (e.g.
+        ``/\\Author\\Title.epub``). The device only knows forward-slash paths, so
+        convert separators, collapse any resulting ``//``, and ensure a leading
+        slash before talking to it.
+        """
+        if not p:
+            return ''
+        p = p.replace('\\', '/')
+        while '//' in p:
+            p = p.replace('//', '/')
+        if not p.startswith('/'):
+            p = '/' + p
+        return p
+
     def delete_books(self, paths, end_session=True):
         import json as _json
-        self._log(f'[CrossPoint] deleting {len(paths)} books: {paths}')
+        norm_paths = [self._normalize_device_path(p) for p in paths]
+        self._log(f'[CrossPoint] deleting {len(norm_paths)} books: {norm_paths}')
         url = self._http_base() + '/delete'
         # Server expects form field 'paths' containing a JSON array string
-        body = urllib.parse.urlencode({'paths': _json.dumps(list(paths))}).encode('utf-8')
+        body = urllib.parse.urlencode({'paths': _json.dumps(norm_paths)}).encode('utf-8')
         req = urllib.request.Request(url, data=body, method='POST',
                                     headers={'Content-Type': 'application/x-www-form-urlencoded'})
         try:
@@ -483,14 +503,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             raise ControlError(desc=f'Delete failed: {exc}')
 
     def remove_books_from_metadata(self, paths, booklists):
-        def norm(p):
-            if not p:
-                return ''
-            p = p.replace('\\', '/')
-            if not p.startswith('/'):
-                p = '/' + p
-            return p
-
+        norm = self._normalize_device_path
         deleted = set(norm(p) for p in paths)
         self._log(f'[CrossPoint] deleted paths: {sorted(deleted)}')
 
