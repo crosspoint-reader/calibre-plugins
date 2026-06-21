@@ -21,7 +21,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 2, 2)
+    version = (0, 2, 3)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -289,14 +289,21 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     def _ensure_dir(self, parent_path, subdirs):
         """Ensure subdirectories exist under parent_path on device.
 
-        Creates the full nested path with a single mkdir call (device
-        uses recursive mkdir). Returns the full directory path.
+        Creates each level individually (one mkdir per component) rather than
+        relying on the device to build a deep path in a single recursive call.
+        A single-level mkdir is the most reliable operation; nested templates
+        like ``Fanfiction/Fandom/Series/title.epub`` failed when the whole path
+        was sent at once. ``_mkdir_on_device`` ignores "already exists" (400),
+        so re-creating existing ancestors is a no-op. Returns the full path.
         """
-        subdir_path = '/'.join(subdirs)
-        self._mkdir_on_device(subdir_path, parent_path)
-        if parent_path == '/':
-            return '/' + subdir_path
-        return parent_path + '/' + subdir_path
+        current = parent_path
+        for sub in subdirs:
+            self._mkdir_on_device(sub, current)
+            if current == '/':
+                current = '/' + sub
+            else:
+                current = current + '/' + sub
+        return current
 
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         host = self.device_host or PREFS['host']
