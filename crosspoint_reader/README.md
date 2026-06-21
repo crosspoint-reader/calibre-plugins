@@ -19,7 +19,9 @@ Default settings:
 ## Optimizer
 
 The plugin can optimize EPUBs before transfer, mirroring the optimizer built into
-the CrossPoint web server. When enabled (Preferences > Plugins > device config >
+the CrossPoint web server. The optimizer is based on the initial work by
+[@zgredex](https://github.com/zgredex), ported here from the firmware. When
+enabled (Preferences > Plugins > device config >
 "Optimize EPUBs before transfer"), each EPUB is processed before upload:
 
 - Every image is scaled to fit the device screen, converted to grayscale, and
