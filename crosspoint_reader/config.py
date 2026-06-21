@@ -46,7 +46,7 @@ class CrossPointConfigWidget(QWidget):
         self.chunk_size = QSpinBox(self)
         self.chunk_size.setRange(512, 65536)
         self.debug = QCheckBox('Enable debug logging', self)
-        self.fetch_metadata = QCheckBox('Fetch metadata (slower device list)', self)
+        self.fetch_metadata = QCheckBox('Fetch metadata for side-loaded books (downloads each once on connect)', self)
         self.send_to_root = QCheckBox('Send to root (ignore folder template)', self)
 
         # Optimizer controls.

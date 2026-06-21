@@ -75,17 +75,24 @@ then sent exactly as Calibre exports them.
 When the device connects, Calibre marks the library books that are already on it
 (the "on device" indicator, the same one you see right after sending a book).
 
-Matching is by the book's Calibre `uuid`, which is embedded in every EPUB the
-plugin sends. To avoid re-downloading every file on each connect, the plugin
-keeps a small local cache of each sent book's identity (`uuid`, title, authors)
-and reuses it to recognize the file instantly. The cache is updated when books
-are sent or deleted, and pruned when files disappear from the device.
+No download is needed. On connect the plugin recognizes device files in two fast,
+local ways:
 
-This works automatically for books sent from this computer. Books that are on the
-device but were **never sent from this machine** (e.g. copied by another computer
-or side-loaded) aren't in the local cache; to recognize those, enable **Fetch
-metadata** in the plugin settings, which reads each EPUB on connect (slower, as it
-downloads them).
+1. **Sent-book cache** — when a book is sent, its identity (`uuid`, title,
+   authors) is cached locally, so it's recognized instantly on every later
+   connect. The cache is updated on send/delete and pruned when files disappear.
+2. **Library name match** — a book can only be marked on-device if it's in your
+   library, so for anything not in the cache (e.g. side-loaded, or sent from
+   another computer) the plugin matches the device **file name against your
+   library by title** and attaches that book's `uuid`. When several library books
+   share a title, an author in the device path disambiguates; if it's still
+   ambiguous, the file is left unmarked rather than mismatched.
+
+Both happen with no network transfer. The optional **Fetch metadata** setting is
+a last resort for library books whose on-device filename doesn't resemble the
+title at all: it downloads each unmatched EPUB once on connect to read its exact
+identity, then caches it. Most setups never need it — leave it off unless some
+library books still aren't marked.
 
 Install:
 1. Download the latest release from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases) (or zip the contents of this directory).

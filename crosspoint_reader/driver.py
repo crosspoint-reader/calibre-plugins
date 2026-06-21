@@ -207,10 +207,14 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         bl = BookList(None, None, None)
         fetch_metadata = PREFS['fetch_metadata']
         device_id = self._device_id()
+        library = self._build_library_index()
         seen = set()
-        for lpath, size in file_list:
+        total = len(file_list)
+        for i, (lpath, size) in enumerate(file_list):
             key = self._normalize_device_path(lpath)
             seen.add(key)
+            if total:
+                self.report_progress(i / float(total), 'Reading books on device...')
             meta = None
             # Prefer the cache: a book sent from this machine is recognized
             # instantly (with its library uuid) so Calibre marks it on-device
@@ -222,27 +226,31 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                     list(entry.get('authors') or []))
                 if entry.get('uuid'):
                     meta.uuid = entry['uuid']
-            # Fall back to reading the EPUB (slow: downloads the file) only when
-            # the user opted in and the cache had nothing usable.
+            # Match the filename against the local library by title (no download).
+            # A book can only be "on device" if it is in the library, so this
+            # marks side-loaded books instantly when their name matches.
+            if meta is None and library is not None:
+                m = self._match_from_library(library, lpath)
+                if m is not None:
+                    meta = m
+                    mc.put_many(device_id,
+                                [(key, mc.entry_from_metadata(size, m))])
+            # Last resort, opt-in: download the EPUB to read its exact identity,
+            # for library books whose on-device filename doesn't match the title.
             if meta is None and fetch_metadata:
-                try:
-                    from calibre.customize.ui import quick_metadata
-                    from calibre.ebooks.metadata.meta import get_metadata
-                    with self._download_temp(lpath) as tf:
-                        with quick_metadata:
-                            m = get_metadata(tf, stream_type='epub', force_read_metadata=True)
-                        if m is not None:
-                            meta = m
-                            mc.put_many(device_id,
-                                        [(key, mc.entry_from_metadata(size, m))])
-                except Exception as exc:
-                    self._log(f'[CrossPoint] metadata read failed for {lpath}: {exc}')
+                m = self._fetch_epub_identity(lpath)
+                if m is not None:
+                    meta = m
+                    mc.put_many(device_id,
+                                [(key, mc.entry_from_metadata(size, m))])
             if meta is None:
                 meta = Metadata(os.path.splitext(os.path.basename(lpath))[0], [])
             book = Book('', lpath, size=size, other=meta)
             if getattr(meta, 'uuid', None):
                 book.uuid = meta.uuid
             bl.add_book(book, replace_metadata=True)
+        if total:
+            self.report_progress(1.0, 'Reading books on device...')
         # Forget files that are no longer on the device.
         mc.prune(device_id, seen)
         return bl
@@ -583,6 +591,94 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         tf.flush()
         tf.seek(0)
         return tf
+
+    @staticmethod
+    def _norm_title(text):
+        from calibre.utils.filenames import ascii_filename
+        return ascii_filename(text or '').strip().lower()
+
+    def _build_library_index(self):
+        """Index the current library as normalized-title -> [book_id].
+
+        Lets ``books()`` match a device file to a library book by name without
+        downloading anything. Returns ``(api, index)`` or None if the library
+        isn't available (e.g. no GUI).
+        """
+        try:
+            from calibre.gui2.ui import get_gui
+            gui = get_gui()
+            if gui is None:
+                return None
+            api = gui.current_db.new_api
+            book_ids = api.all_book_ids()
+            titles = api.all_field_for('title', book_ids)
+            index = {}
+            for bid, title in titles.items():
+                key = self._norm_title(title)
+                if key:
+                    index.setdefault(key, []).append(bid)
+            return (api, index)
+        except Exception as exc:
+            self._log(f'[CrossPoint] library index unavailable: {exc}')
+            return None
+
+    def _match_from_library(self, library, lpath):
+        """Find the library book matching a device file name. Returns Metadata|None.
+
+        Matches the filename stem (and, for ``Title - Author`` style names, the
+        part before the last `` - ``) against library titles. When several books
+        share a title, an author appearing in the device path disambiguates;
+        if still ambiguous, returns None rather than risk a wrong mark.
+        """
+        api, index = library
+        stem = os.path.splitext(os.path.basename(lpath))[0]
+        candidates = list(index.get(self._norm_title(stem), ()))
+        if not candidates and ' - ' in stem:
+            candidates = list(index.get(self._norm_title(stem.rsplit(' - ', 1)[0]), ()))
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            path_norm = self._norm_title(lpath)
+
+            def author_in_path(bid):
+                for a in (api.field_for('authors', bid) or ()):
+                    # Match every word of the author name, order-independent, so
+                    # "Emily Dickinson" matches an author-sort path "Dickinson, Emily".
+                    tokens = self._norm_title(a).split()
+                    if tokens and all(t in path_norm for t in tokens):
+                        return True
+                return False
+
+            narrowed = [bid for bid in candidates if author_in_path(bid)]
+            if len(narrowed) != 1:
+                return None  # ambiguous — don't guess
+            candidates = narrowed
+        bid = candidates[0]
+        mi = Metadata(api.field_for('title', bid) or stem,
+                      list(api.field_for('authors', bid) or []))
+        uuid = api.field_for('uuid', bid)
+        if uuid:
+            mi.uuid = uuid
+        return mi
+
+    def _fetch_epub_identity(self, lpath):
+        """Read a remote EPUB's identity (title/authors/uuid) as a Metadata.
+
+        Downloads the whole file then reads its metadata. A partial/early-abort
+        read is not possible against the device: its HTTP server streams whole
+        files synchronously on a single thread and does not support Range
+        requests, so closing the connection early stalls the next request. The
+        result is cached by the caller, so this is a one-time cost per file.
+        """
+        try:
+            from calibre.customize.ui import quick_metadata
+            from calibre.ebooks.metadata.meta import get_metadata
+            with self._download_temp(lpath) as tf:
+                with quick_metadata:
+                    return get_metadata(tf, stream_type='epub', force_read_metadata=True)
+        except Exception as exc:
+            self._log(f'[CrossPoint] metadata read failed for {lpath}: {exc}')
+            return None
 
 
     def eject(self):
