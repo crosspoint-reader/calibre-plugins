@@ -21,7 +21,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     description = 'CrossPoint Reader wireless device'
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'CrossPoint Reader'
-    version = (0, 2, 3)
+    version = (0, 2, 4)
 
     # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
@@ -134,6 +134,11 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         host = self.device_host or PREFS['host']
         return f'http://{host}'
 
+    def _device_id(self):
+        """Stable id for the connected device, used to key the metadata cache."""
+        host = self.device_host or PREFS['host']
+        return 'crosspoint-' + host.replace('.', '-')
+
     def _http_get_json(self, path, params=None, timeout=5):
         url = self._http_base() + path
         if params:
@@ -197,13 +202,29 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     def books(self, oncard=None, end_session=True):
         if oncard is not None:
             return BookList(None, None, None)
+        from . import metadata_cache as mc
         file_list = self._list_files_recursive('/')
         bl = BookList(None, None, None)
         fetch_metadata = PREFS['fetch_metadata']
+        device_id = self._device_id()
+        seen = set()
         for lpath, size in file_list:
-            title = os.path.splitext(os.path.basename(lpath))[0]
-            meta = Metadata(title, [])
-            if fetch_metadata:
+            key = self._normalize_device_path(lpath)
+            seen.add(key)
+            meta = None
+            # Prefer the cache: a book sent from this machine is recognized
+            # instantly (with its library uuid) so Calibre marks it on-device
+            # without re-downloading. Size guards against a changed file.
+            entry = mc.get_entry(device_id, key)
+            if entry and entry.get('size') == size:
+                meta = Metadata(
+                    entry.get('title') or os.path.splitext(os.path.basename(lpath))[0],
+                    list(entry.get('authors') or []))
+                if entry.get('uuid'):
+                    meta.uuid = entry['uuid']
+            # Fall back to reading the EPUB (slow: downloads the file) only when
+            # the user opted in and the cache had nothing usable.
+            if meta is None and fetch_metadata:
                 try:
                     from calibre.customize.ui import quick_metadata
                     from calibre.ebooks.metadata.meta import get_metadata
@@ -212,10 +233,18 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                             m = get_metadata(tf, stream_type='epub', force_read_metadata=True)
                         if m is not None:
                             meta = m
+                            mc.put_many(device_id,
+                                        [(key, mc.entry_from_metadata(size, m))])
                 except Exception as exc:
                     self._log(f'[CrossPoint] metadata read failed for {lpath}: {exc}')
+            if meta is None:
+                meta = Metadata(os.path.splitext(os.path.basename(lpath))[0], [])
             book = Book('', lpath, size=size, other=meta)
+            if getattr(meta, 'uuid', None):
+                book.uuid = meta.uuid
             bl.add_book(book, replace_metadata=True)
+        # Forget files that are no longer on the device.
+        mc.prune(device_id, seen)
         return bl
 
     def sync_booklists(self, booklists, end_session=True):
@@ -456,8 +485,11 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             return None, None
 
     def add_books_to_metadata(self, locations, metadata, booklists):
+        from . import metadata_cache as mc
         self._log(f'[CrossPoint] add_books_to_metadata: {len(locations)} locations, '
                   f'{len(booklists)} booklists')
+        device_id = self._device_id()
+        cache_entries = []
         metadata = iter(metadata)
         for location in locations:
             info = next(metadata)
@@ -469,6 +501,11 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 self._log(f'[CrossPoint] added to booklist: {lpath}')
             else:
                 self._log(f'[CrossPoint] WARNING: booklists empty, could not add {lpath}')
+            # Remember this book's identity so it is recognized (and marked
+            # on-device) on the next connect without re-reading the EPUB.
+            cache_entries.append((self._normalize_device_path(lpath),
+                                  mc.entry_from_metadata(length, info)))
+        mc.put_many(device_id, cache_entries)
 
 
     @staticmethod
@@ -510,6 +547,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             raise ControlError(desc=f'Delete failed: {exc}')
 
     def remove_books_from_metadata(self, paths, booklists):
+        from . import metadata_cache as mc
         norm = self._normalize_device_path
         deleted = set(norm(p) for p in paths)
         self._log(f'[CrossPoint] deleted paths: {sorted(deleted)}')
@@ -522,6 +560,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 if bpath in deleted or blpath in deleted:
                     bl.remove_book(book)
                     removed += 1
+        mc.remove_many(self._device_id(), deleted)
         self._log(f'[CrossPoint] removed {removed} items from device list')
 
     def get_file(self, path, outfile, end_session=True, this_book=None, total_books=None):

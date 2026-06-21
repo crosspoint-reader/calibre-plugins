@@ -70,6 +70,23 @@ never blocked.
 To turn the feature off, uncheck **Optimize EPUBs before transfer** — books are
 then sent exactly as Calibre exports them.
 
+## On-device status
+
+When the device connects, Calibre marks the library books that are already on it
+(the "on device" indicator, the same one you see right after sending a book).
+
+Matching is by the book's Calibre `uuid`, which is embedded in every EPUB the
+plugin sends. To avoid re-downloading every file on each connect, the plugin
+keeps a small local cache of each sent book's identity (`uuid`, title, authors)
+and reuses it to recognize the file instantly. The cache is updated when books
+are sent or deleted, and pruned when files disappear from the device.
+
+This works automatically for books sent from this computer. Books that are on the
+device but were **never sent from this machine** (e.g. copied by another computer
+or side-loaded) aren't in the local cache; to recognize those, enable **Fetch
+metadata** in the plugin settings, which reads each EPUB on connect (slower, as it
+downloads them).
+
 Install:
 1. Download the latest release from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases) (or zip the contents of this directory).
 2. In Calibre: Preferences > Plugins > Load plugin from file.
