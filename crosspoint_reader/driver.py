@@ -282,8 +282,12 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             if not template:
                 template = sconfig().parse().send_template
 
+            # get_component_metadata sets format_args['id'] = str(book_id),
+            # so we must pass the actual Calibre database ID instead of -1.
+            book_id = mi.id if mi.id is not None else -1
+
             components = get_components(
-                template, mi, -1, '%b %Y', 250,
+                template, mi, book_id, '%b %Y', 250,
                 ascii_filename, to_lowercase=False,
                 replace_whitespace=False, safe_format=True,
                 last_has_extension=False,
