@@ -301,7 +301,8 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
             items[iid] = (href, tag)
     spine_ids = [i for i in re.findall(r'<(?:\w+:)?itemref\b[^>]*\bidref="([^"]+)"', opf)]
 
-    anchor_map = {}   # (basename_of_orig_href, frag) -> new basename
+    anchor_map = {}     # (basename_of_orig_href, frag) -> new basename
+    chunk_origin = {}   # zip name of a chunk -> basename of the file it was split from
 
     for sid in spine_ids:
         if sid not in items:
@@ -360,6 +361,7 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
         for k, (name, content) in enumerate(pieces):
             new_zname = posixpath.join(zdir, name) if zdir else name
             entries[new_zname] = content.encode('utf-8')
+            chunk_origin[new_zname] = posixpath.basename(href)
             if k > 0:
                 order.insert(insert_at + k, new_zname)
             for frag in re.findall(r'id="([^"]+)"', content):
@@ -384,13 +386,13 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
             posixpath.basename(zname), len(pieces), max(len(c) for _, c in pieces)))
 
     # Remap fragment links onto the chunk holding the anchor; drop page-list navs.
-    if anchor_map or True:
-        for n in list(order):
-            if not (XHTML_RE.search(n) or n.lower().endswith('.ncx')):
-                continue
-            s = entries[n].decode('utf-8', 'replace')
-            before = s
+    for n in list(order):
+        if not (XHTML_RE.search(n) or n.lower().endswith('.ncx')):
+            continue
+        s = entries[n].decode('utf-8', 'replace')
+        before = s
 
+        if anchor_map:
             def remap(mm):
                 pre, fname, frag = mm.group(1), mm.group(2), mm.group(3)
                 new = anchor_map.get((posixpath.basename(fname), frag))
@@ -400,9 +402,24 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
                 return '%s%s#%s"' % (pre, fname, frag)
 
             s = re.sub(r'((?:href|src)=")([^"#]+)#([^"]+)"', remap, s)
-            s = re.sub(r'<nav[^>]*epub:type="page-list".*?</nav>', '', s, flags=re.S)
-            if s != before:
-                entries[n] = s.encode('utf-8')
+
+            # Fragment-only refs ("#note1") are relative to the file they sit
+            # in; when that file was split, the anchor may now live in a
+            # sibling chunk, so resolve against the chunk's original name.
+            self_origin = chunk_origin.get(n, posixpath.basename(n))
+
+            def remap_local(mm):
+                pre, frag = mm.group(1), mm.group(2)
+                new = anchor_map.get((self_origin, frag))
+                if new and new != posixpath.basename(n):
+                    return '%s%s#%s"' % (pre, new, frag)
+                return mm.group(0)
+
+            s = re.sub(r'(href=")#([^"]+)"', remap_local, s)
+
+        s = re.sub(r'<nav[^>]*epub:type="page-list".*?</nav>', '', s, flags=re.S)
+        if s != before:
+            entries[n] = s.encode('utf-8')
 
     # Remove embedded fonts and @font-face rules.
     for n in list(order):

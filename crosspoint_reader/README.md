@@ -67,6 +67,9 @@ never blocked.
    - **JPEG quality** — 1–100 (default 85). Lower = smaller files.
    - **Convert images to grayscale** — on by default (recommended for e-ink).
    - **Auto-crop uniform margins** — off by default; trims solid page borders.
+   - **Split large chapters/paragraphs, remove fonts (prevents out-of-memory)**
+     — on by default; restructures text for the firmware's layout memory limits
+     (see above). Disable it to keep the EPUB's file/paragraph structure as-is.
 4. Click **OK**, then **restart Calibre** if it was already running so the new
    settings take effect.
 5. Send a book to the device as usual (right-click → *Send to device*, or the
