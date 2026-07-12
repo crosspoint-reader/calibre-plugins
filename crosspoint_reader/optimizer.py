@@ -79,10 +79,14 @@ def resolve_profile(device_target, detected_device):
 
 
 class Options(object):
-    def __init__(self, quality=DEFAULT_JPEG_QUALITY, grayscale=True, auto_crop=False):
+    def __init__(self, quality=DEFAULT_JPEG_QUALITY, grayscale=True, auto_crop=False,
+                 split_text=True):
         self.quality = int(quality)
         self.grayscale = bool(grayscale)
         self.auto_crop = bool(auto_crop)
+        # Split oversized paragraphs/chapters and strip fonts for the
+        # low-RAM firmware layout engine (see textsplit.py).
+        self.split_text = bool(split_text)
 
 
 # ---------------------------------------------------------------------------
@@ -595,6 +599,14 @@ def optimize_epub(in_path, out_path, profile, opts, log_fn=None):
                     zout.writestr(n, data, compress_type=zipfile.ZIP_DEFLATED)
     finally:
         zin.close()
+
+    if getattr(opts, 'split_text', False):
+        from .textsplit import split_epub_text
+        split_summary = split_epub_text(out_path, log, profile, opts)
+        summary['fixes'] += (split_summary.get('paras', 0)
+                             + split_summary.get('file_splits', 0)
+                             + split_summary.get('fonts', 0)
+                             + split_summary.get('dataimgs', 0))
 
     summary['new_size'] = os.path.getsize(out_path)
     summary['elapsed'] = time.time() - start

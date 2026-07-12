@@ -32,6 +32,7 @@ PREFS.defaults['optimize'] = False
 PREFS.defaults['optimize_grayscale'] = True
 PREFS.defaults['optimize_auto_crop'] = False
 PREFS.defaults['optimize_quality'] = 85
+PREFS.defaults['optimize_split'] = True
 PREFS.defaults['device_target'] = 'auto'  # 'auto' | 'X4' | 'X3'
 
 
@@ -53,6 +54,8 @@ class CrossPointConfigWidget(QWidget):
         self.optimize = QCheckBox('Optimize EPUBs before transfer', self)
         self.optimize_grayscale = QCheckBox('Convert images to grayscale', self)
         self.optimize_auto_crop = QCheckBox('Auto-crop uniform margins', self)
+        self.optimize_split = QCheckBox(
+            'Split large chapters/paragraphs, remove fonts (prevents out-of-memory)', self)
         self.optimize_quality = QSpinBox(self)
         self.optimize_quality.setRange(1, 100)
         self.optimize_quality.setSuffix('%')
@@ -71,6 +74,7 @@ class CrossPointConfigWidget(QWidget):
         self.optimize.setChecked(PREFS['optimize'])
         self.optimize_grayscale.setChecked(PREFS['optimize_grayscale'])
         self.optimize_auto_crop.setChecked(PREFS['optimize_auto_crop'])
+        self.optimize_split.setChecked(PREFS['optimize_split'])
         self.optimize_quality.setValue(PREFS['optimize_quality'])
         idx = self.device_target.findData(PREFS['device_target'])
         self.device_target.setCurrentIndex(idx if idx >= 0 else 0)
@@ -107,6 +111,7 @@ class CrossPointConfigWidget(QWidget):
         layout.addRow('JPEG quality', self.optimize_quality)
         layout.addRow('', self.optimize_grayscale)
         layout.addRow('', self.optimize_auto_crop)
+        layout.addRow('', self.optimize_split)
 
         self.optimize.toggled.connect(self._sync_optimizer_enabled)
         self._sync_optimizer_enabled(self.optimize.isChecked())
@@ -135,12 +140,13 @@ class CrossPointConfigWidget(QWidget):
         PREFS['optimize'] = bool(self.optimize.isChecked())
         PREFS['optimize_grayscale'] = bool(self.optimize_grayscale.isChecked())
         PREFS['optimize_auto_crop'] = bool(self.optimize_auto_crop.isChecked())
+        PREFS['optimize_split'] = bool(self.optimize_split.isChecked())
         PREFS['optimize_quality'] = int(self.optimize_quality.value())
         PREFS['device_target'] = self.device_target.currentData()
 
     def _sync_optimizer_enabled(self, enabled):
         for w in (self.optimize_grayscale, self.optimize_auto_crop,
-                  self.optimize_quality, self.device_target):
+                  self.optimize_split, self.optimize_quality, self.device_target):
             w.setEnabled(enabled)
 
     def _refresh_logs(self):

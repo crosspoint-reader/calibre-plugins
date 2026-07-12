@@ -31,6 +31,17 @@ enabled (Preferences > Plugins > device config >
   width/height are stripped, SVG covers/wrapped images are unwrapped, OPF
   media-types and cover meta are fixed, the NCX identifier is synced, a small
   defensive stylesheet is injected, and the archive is re-zipped mimetype-first.
+- Text is restructured for the firmware's layout memory limits (optional,
+  "Split large chapters/paragraphs" checkbox, on by default): paragraphs larger
+  than ~1.6 KB are split into ~1.2 KB `<p>` siblings at sentence boundaries
+  (the firmware lays out a whole paragraph at once, holding every word in RAM,
+  so a single multi-KB paragraph can OOM the device even in a small file);
+  spine files larger than ~9.5 KB are split into ~7 KB files with the OPF
+  manifest/spine expanded and `href="...#fragment"` links remapped onto the
+  chunk holding the anchor; embedded fonts and `@font-face` rules are removed;
+  page-list navs are dropped; and base64 `data:` URI images are extracted into
+  real (optimized) image files. Every text transformation verifies that the
+  visible text is byte-identical and reverts itself on any mismatch or error.
 
 The target screen size comes from the device profile — **X4 = 480×800**,
 **X3 = 528×792** — which is auto-detected from the device's `/api/status`
