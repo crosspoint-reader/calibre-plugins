@@ -62,7 +62,10 @@ def parse_nodes(s):
                     k += 2
                 elif tag.startswith('</'):
                     depth -= 1
-                elif not (tag.endswith('/>') or name in VOID or tag.startswith('<!')):
+                elif not (tag.endswith('/>') or name in VOID
+                          or tag.startswith(('<!', '<?'))):
+                    # processing instructions (<?dp ...?>) and declarations
+                    # never nest; everything else opens an element
                     depth += 1
                 if depth <= 0:
                     break
@@ -80,16 +83,22 @@ def parse_nodes(s):
 
 
 def split_text_sentences(text, target):
-    """Split a text run into pieces of ~target bytes at sentence/space boundaries."""
+    """Split a text run into pieces of ~target bytes at sentence/space boundaries.
+
+    Lossless: the boundary whitespace stays with the preceding piece, so
+    ``''.join(pieces) == text`` always holds (pieces may later be re-joined
+    inside one paragraph, where a dropped space would corrupt the text)."""
     pieces = []
     while len(text) > target:
         cut = text.rfind('. ', 0, target)
-        if cut == -1:
-            cut = text.rfind(' ', 0, target)
-        if cut == -1:
-            break
-        pieces.append(text[:cut + 1])
-        text = text[cut + 1:].lstrip()
+        if cut != -1:
+            cut += 2
+        else:
+            cut = text.rfind(' ', 0, target) + 1
+            if cut == 0:
+                break
+        pieces.append(text[:cut])
+        text = text[cut:]
     pieces.append(text)
     return pieces
 
