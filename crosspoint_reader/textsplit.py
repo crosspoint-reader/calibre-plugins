@@ -36,6 +36,12 @@ PARA_TARGET = 1200     # aim for paragraphs of this many bytes
 VOID = ('meta', 'link', 'img', 'br', 'hr', 'image', 'input', 'col', 'source')
 FONT_RE = re.compile(r'\.(otf|ttf|woff2?)$', re.IGNORECASE)
 XHTML_RE = re.compile(r'\.(xhtml|html|htm)$', re.IGNORECASE)
+# Tags that make a <p> unsplittable (block-level content inside a paragraph).
+# <img> is inline and stays atomic during grouping, so it does not block.
+BLOCK_RE = re.compile(r'<(?:p|div|table|ul|ol)\b')
+# Inline wrappers that may be split into several same-tag siblings. Some
+# publishers wrap entire multi-KB paragraphs in a single <span>.
+INLINE_WRAP = ('span', 'em', 'i', 'b', 'strong', 'a', 'u', 'small', 'sub', 'sup')
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +109,42 @@ def split_text_sentences(text, target):
     return pieces
 
 
+def _group_inline(inner):
+    """Pack inline content into ~PARA_TARGET-byte chunks (lossless concat).
+
+    Oversized bare text is cut at sentence boundaries; an oversized inline
+    wrapper (e.g. a <span> around a whole paragraph) is split recursively into
+    several same-tag siblings. Anything else stays atomic."""
+    groups, cur, cur_len = [], [], 0
+
+    def flush():
+        nonlocal cur, cur_len
+        if ''.join(cur).strip():
+            groups.append(''.join(cur))
+        cur, cur_len = [], 0
+
+    for tok in parse_nodes(inner):
+        if len(tok) > PARA_LIMIT and not tok.startswith('<'):
+            pieces = split_text_sentences(tok, PARA_TARGET)
+        elif len(tok) > PARA_LIMIT and tok.startswith('<'):
+            mm = re.match(r'(<(\w+)[^>]*>)(.*)(</\2>)$', tok, re.S)
+            if mm and mm.group(2).lower() in INLINE_WRAP \
+                    and not BLOCK_RE.search(mm.group(3)):
+                pieces = [mm.group(1) + g + mm.group(4)
+                          for g in _group_inline(mm.group(3))]
+            else:
+                pieces = [tok]
+        else:
+            pieces = [tok]
+        for piece in pieces:
+            if cur_len + len(piece) > PARA_TARGET and cur_len > 0 and piece.strip():
+                flush()
+            cur.append(piece)
+            cur_len += len(piece)
+    flush()
+    return groups
+
+
 def split_big_paragraphs(html):
     """Rewrite every <p> bigger than PARA_LIMIT into several sibling <p> elements.
     Only inline content is split; a <p> containing block-level tags is left alone.
@@ -110,7 +152,7 @@ def split_big_paragraphs(html):
     out, changed = [], False
     for node in parse_nodes(html):
         m = re.match(r'(<p\b[^>]*>)(.*)(</p>)$', node, re.S) if node.startswith('<p') else None
-        if not m or len(m.group(2)) <= PARA_LIMIT or re.search(r'<(?:p|div|table|ul|ol|img)\b', m.group(2)):
+        if not m or len(m.group(2)) <= PARA_LIMIT or BLOCK_RE.search(m.group(2)):
             if node.startswith('<') and not node.startswith(('<p', '<!', '</')) \
                and len(node) > PARA_LIMIT:
                 mm = re.match(r'(<(\w+)[^>]*>)(.*)(</\2>)$', node, re.S)
@@ -123,23 +165,7 @@ def split_big_paragraphs(html):
             out.append(node)
             continue
         open_tag, inner, close_tag = m.groups()
-        groups, cur, cur_len = [], [], 0
-
-        def pflush():
-            nonlocal cur, cur_len
-            if ''.join(cur).strip():
-                groups.append(''.join(cur))
-            cur, cur_len = [], 0
-
-        for tok in parse_nodes(inner):
-            pieces = (split_text_sentences(tok, PARA_TARGET)
-                      if not tok.startswith('<') and len(tok) > PARA_LIMIT else [tok])
-            for piece in pieces:
-                if cur_len + len(piece) > PARA_TARGET and cur_len > 0 and piece.strip():
-                    pflush()
-                cur.append(piece)
-                cur_len += len(piece)
-        pflush()
+        groups = _group_inline(inner)
         if len(groups) < 2:
             out.append(node)
             continue
