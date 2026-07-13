@@ -338,8 +338,8 @@ def upload_file(host, port, upload_path, filename, filepath, chunk_size=16384, d
                 if msg.startswith('ERROR'):
                     raise WebSocketError(msg)
         except UploadError:
-                raise
-        except WebSocketError as exc:
+            raise
+        except (WebSocketError, OSError) as exc:
             raise UploadError(str(exc), upload_started=upload_started) from exc
     finally:
         client.close()
