@@ -342,16 +342,21 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 current = current + '/' + sub
         return current
 
-    def _delete_upload_path_on_device(self, lpath):
-        """Best-effort cleanup for a possibly partial upload."""
+    def _delete_paths_on_device(self, paths):
         import json as _json
-        norm_path = self._normalize_device_path(lpath)
+        norm_paths = [self._normalize_device_path(p) for p in paths]
         url = self._http_base() + '/delete'
-        body = urllib.parse.urlencode({'paths': _json.dumps([norm_path])}).encode('utf-8')
+        # Server expects form field 'paths' containing a JSON array string.
+        body = urllib.parse.urlencode({'paths': _json.dumps(norm_paths)}).encode('utf-8')
         req = urllib.request.Request(url, data=body, method='POST',
                                      headers={'Content-Type': 'application/x-www-form-urlencoded'})
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
+            return resp.status
+
+    def _delete_upload_path_on_device(self, lpath):
+        """Best-effort cleanup for a possibly partial upload."""
+        self._delete_paths_on_device([lpath])
 
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         host = self.device_host or PREFS['host']
@@ -589,17 +594,11 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         return p
 
     def delete_books(self, paths, end_session=True):
-        import json as _json
         norm_paths = [self._normalize_device_path(p) for p in paths]
         self._log(f'[CrossPoint] deleting {len(norm_paths)} books: {norm_paths}')
-        url = self._http_base() + '/delete'
-        # Server expects form field 'paths' containing a JSON array string
-        body = urllib.parse.urlencode({'paths': _json.dumps(norm_paths)}).encode('utf-8')
-        req = urllib.request.Request(url, data=body, method='POST',
-                                    headers={'Content-Type': 'application/x-www-form-urlencoded'})
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                self._log(f'[CrossPoint] delete OK: {resp.status}')
+            status = self._delete_paths_on_device(norm_paths)
+            self._log(f'[CrossPoint] delete OK: {status}')
         except urllib.error.HTTPError as exc:
             err_body = exc.read().decode('utf-8', 'ignore') if exc.fp else ''
             self._log(f'[CrossPoint] delete error {exc.code}: {err_body}')
