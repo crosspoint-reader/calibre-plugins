@@ -277,12 +277,78 @@ def _strip_img_dims(text):
                      flags=re.IGNORECASE)
         tag = re.sub(r"\s+(?:width|height)\s*=\s*'[^']*'", '', tag,
                      flags=re.IGNORECASE)
+        tag = _fix_img_style_text(tag)
         return tag
     return re.sub(r'<img\b[^>]*>', repl, text, flags=re.IGNORECASE)
 
 
+def _filter_style_declarations(style, predicate):
+    if not style:
+        return style, False
+    kept = []
+    modified = False
+    for decl in style.split(';'):
+        decl = decl.strip()
+        if not decl:
+            continue
+        if ':' not in decl:
+            kept.append(decl)
+            continue
+        prop, value = decl.split(':', 1)
+        if predicate(prop.strip().lower(), value.strip().lower()):
+            modified = True
+            continue
+        kept.append(decl)
+    return '; '.join(kept), modified
+
+
+def _is_problem_img_decl(prop, value):
+    return prop in ('width', 'height')
+
+
+def _fix_img_style_attr(style):
+    return _filter_style_declarations(style, _is_problem_img_decl)
+
+
+def _fix_img_style_text(tag):
+    def repl(m):
+        quote = m.group(1)
+        style = m.group(2)
+        fixed, modified = _fix_img_style_attr(style)
+        if not modified:
+            return m.group(0)
+        if fixed:
+            return ' style=%s%s%s' % (quote, fixed, quote)
+        return ''
+
+    return re.sub(r'\s+style=(["\'])(.*?)\1', repl, tag, flags=re.IGNORECASE)
+
+
+def _fix_img_element(img):
+    modified = False
+    if img.get('width') is not None:
+        del img.attrib['width']
+        modified = True
+    if img.get('height') is not None:
+        del img.attrib['height']
+        modified = True
+    style = img.get('style')
+    new_style, style_modified = _fix_img_style_attr(style)
+    if style_modified:
+        if new_style:
+            img.set('style', new_style)
+        else:
+            del img.attrib['style']
+        modified = True
+    src = img.get('src')
+    if src and RENAME_RE.search(src):
+        img.set('src', RENAME_RE.sub('.jpg', src))
+        modified = True
+    return modified
+
+
 def _fix_xhtml(text, log):
-    """Strip <img> width/height, unwrap SVG covers/images, rename refs, inject CSS."""
+    """Normalize image sizing, unwrap SVG covers/images, rename refs, inject CSS."""
     fixes = 0
     # SVG cover / SVG-wrapped images: unwrap to a plain <img>.
     new_text, n = _unwrap_svg_images(text)
@@ -298,28 +364,10 @@ def _fix_xhtml(text, log):
         if root is not None:
             modified = False
             for img in root.iter('{http://www.w3.org/1999/xhtml}img'):
-                if img.get('width') is not None:
-                    del img.attrib['width']
-                    modified = True
-                if img.get('height') is not None:
-                    del img.attrib['height']
-                    modified = True
-                src = img.get('src')
-                if src and RENAME_RE.search(src):
-                    img.set('src', RENAME_RE.sub('.jpg', src))
-                    modified = True
+                modified |= _fix_img_element(img)
             # also catch namespace-less <img> (malformed docs)
             for img in root.iter('img'):
-                if img.get('width') is not None:
-                    del img.attrib['width']
-                    modified = True
-                if img.get('height') is not None:
-                    del img.attrib['height']
-                    modified = True
-                src = img.get('src')
-                if src and RENAME_RE.search(src):
-                    img.set('src', RENAME_RE.sub('.jpg', src))
-                    modified = True
+                modified |= _fix_img_element(img)
             if modified:
                 text = etree.tostring(
                     root, encoding='unicode',
