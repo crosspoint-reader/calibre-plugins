@@ -282,24 +282,38 @@ def _strip_img_dims(text):
     return re.sub(r'<img\b[^>]*>', repl, text, flags=re.IGNORECASE)
 
 
+_STYLE_DECL_RE = re.compile(r'''
+    (?:^|(?<=;))
+    (?P<leading>\s*)
+    (?P<prop>[-_a-zA-Z][-_a-zA-Z0-9]*)\s*:
+    (?P<value>
+        (?:
+            [^;"'()]
+            | "(?:\\.|[^"\\])*"
+            | '(?:\\.|[^'\\])*'
+            | \((?:\\.|[^()\\])*\)
+        )*
+    )
+    (?P<trailing>\s*)
+    (?P<semicolon>;?)
+''', re.VERBOSE)
+
+
 def _filter_style_declarations(style, predicate):
     if not style:
         return style, False
-    kept = []
     modified = False
-    for decl in style.split(';'):
-        decl = decl.strip()
-        if not decl:
-            continue
-        if ':' not in decl:
-            kept.append(decl)
-            continue
-        prop, value = decl.split(':', 1)
-        if predicate(prop.strip().lower(), value.strip().lower()):
+
+    def repl(m):
+        nonlocal modified
+        prop = m.group('prop').strip().lower()
+        value = m.group('value').strip().lower()
+        if predicate(prop, value):
             modified = True
-            continue
-        kept.append(decl)
-    return '; '.join(kept), modified
+            return ''
+        return m.group(0)
+
+    return _STYLE_DECL_RE.sub(repl, style), modified
 
 
 def _is_problem_img_decl(prop, value):
@@ -321,7 +335,8 @@ def _fix_img_style_text(tag):
             return ' style=%s%s%s' % (quote, fixed, quote)
         return ''
 
-    return re.sub(r'\s+style=(["\'])(.*?)\1', repl, tag, flags=re.IGNORECASE)
+    return re.sub(r'\s+style=(["\'])(.*?)\1', repl, tag,
+                  flags=re.IGNORECASE | re.DOTALL)
 
 
 def _fix_img_element(img):
