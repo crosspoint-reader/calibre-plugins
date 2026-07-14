@@ -342,6 +342,22 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 current = current + '/' + sub
         return current
 
+    def _delete_paths_on_device(self, paths):
+        import json as _json
+        norm_paths = [self._normalize_device_path(p) for p in paths]
+        url = self._http_base() + '/delete'
+        # Server expects form field 'paths' containing a JSON array string.
+        body = urllib.parse.urlencode({'paths': _json.dumps(norm_paths)}).encode('utf-8')
+        req = urllib.request.Request(url, data=body, method='POST',
+                                     headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+            return resp.status
+
+    def _delete_upload_path_on_device(self, lpath):
+        """Best-effort cleanup for a possibly partial upload."""
+        self._delete_paths_on_device([lpath])
+
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         host = self.device_host or PREFS['host']
         port = self.device_port or PREFS['port']
@@ -351,6 +367,11 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             self._log(f'[CrossPoint] chunk_size capped to 2048 (was {chunk_size})')
             chunk_size = 2048
         debug = PREFS['debug']
+        upload_retries = max(0, int(PREFS['upload_retries']))
+        retry_delay = max(0, int(PREFS['retry_delay']))
+        book_cooldown = max(0, int(PREFS['book_cooldown']))
+        socket_timeout = max(5, int(PREFS['socket_timeout']))
+        max_attempts = upload_retries + 1
 
         # Normalize base upload path
         base_path = upload_path
@@ -419,18 +440,55 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                                          'Transferring books to device...')
 
             try:
-                ws_client.upload_file(
-                    host,
-                    port,
-                    target_dir,
-                    filename,
-                    send_path,
-                    chunk_size=chunk_size,
-                    debug=debug,
-                    progress_cb=_progress,
-                    logger=self._log,
-                )
+                last_error = None
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        if attempt > 1:
+                            self.report_progress(i / float(total),
+                                                 'Retrying transfer to device...')
+                        ws_client.upload_file(
+                            host,
+                            port,
+                            target_dir,
+                            filename,
+                            send_path,
+                            chunk_size=chunk_size,
+                            debug=debug,
+                            progress_cb=_progress,
+                            logger=self._log,
+                            timeout=socket_timeout,
+                        )
+                        last_error = None
+                        break
+                    except ws_client.UploadError as exc:
+                        last_error = exc
+                        self._log(f'[CrossPoint] upload failed for {filename} '
+                                  f'attempt {attempt}/{max_attempts}: {exc}')
+                        if exc.upload_started:
+                            try:
+                                self._delete_upload_path_on_device(lpath)
+                            except Exception as cleanup_exc:
+                                self._log(f'[CrossPoint] partial upload cleanup ignored '
+                                          f'for {lpath}: {cleanup_exc}')
+                        if attempt >= max_attempts:
+                            break
+                        if retry_delay > 0:
+                            time.sleep(retry_delay)
+                    except (ws_client.WebSocketError, OSError) as exc:
+                        last_error = exc
+                        self._log(f'[CrossPoint] upload failed for {filename} '
+                                  f'attempt {attempt}/{max_attempts}: {exc}')
+                        if attempt >= max_attempts:
+                            break
+                        if retry_delay > 0:
+                            time.sleep(retry_delay)
+
+                if last_error is not None:
+                    raise ControlError(desc=f'Upload failed for {filename} after '
+                                      f'{max_attempts} attempt(s): {last_error}')
                 paths.append((lpath, os.path.getsize(send_path)))
+                if book_cooldown > 0 and i + 1 < total:
+                    time.sleep(book_cooldown)
             finally:
                 if opt_temp is not None:
                     try:
@@ -536,17 +594,11 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         return p
 
     def delete_books(self, paths, end_session=True):
-        import json as _json
         norm_paths = [self._normalize_device_path(p) for p in paths]
         self._log(f'[CrossPoint] deleting {len(norm_paths)} books: {norm_paths}')
-        url = self._http_base() + '/delete'
-        # Server expects form field 'paths' containing a JSON array string
-        body = urllib.parse.urlencode({'paths': _json.dumps(norm_paths)}).encode('utf-8')
-        req = urllib.request.Request(url, data=body, method='POST',
-                                    headers={'Content-Type': 'application/x-www-form-urlencoded'})
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                self._log(f'[CrossPoint] delete OK: {resp.status}')
+            status = self._delete_paths_on_device(norm_paths)
+            self._log(f'[CrossPoint] delete OK: {status}')
         except urllib.error.HTTPError as exc:
             err_body = exc.read().decode('utf-8', 'ignore') if exc.fp else ''
             self._log(f'[CrossPoint] delete error {exc.code}: {err_body}')

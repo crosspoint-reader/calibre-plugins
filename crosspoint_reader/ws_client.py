@@ -10,6 +10,12 @@ class WebSocketError(RuntimeError):
     pass
 
 
+class UploadError(WebSocketError):
+    def __init__(self, message, upload_started=False):
+        super().__init__(message)
+        self.upload_started = upload_started
+
+
 class WebSocketClient:
     def __init__(self, host, port, timeout=10, debug=False, logger=None):
         self.host = host
@@ -28,7 +34,10 @@ class WebSocketClient:
                 print(msg)
 
     def connect(self):
-        self.sock = socket.create_connection((self.host, self.port), self.timeout)
+        try:
+            self.sock = socket.create_connection((self.host, self.port), self.timeout)
+        except OSError as exc:
+            raise WebSocketError('Failed to connect: ' + str(exc)) from exc
         key = base64.b64encode(os.urandom(16)).decode('ascii')
         req = (
             'GET / HTTP/1.1\r\n'
@@ -39,7 +48,10 @@ class WebSocketClient:
             'Sec-WebSocket-Version: 13\r\n'
             '\r\n'
         )
-        self.sock.sendall(req.encode('ascii'))
+        try:
+            self.sock.sendall(req.encode('ascii'))
+        except OSError as exc:
+            raise WebSocketError('Failed to send handshake: ' + str(exc)) from exc
         data = self._read_http_response()
         if b' 101 ' not in data.split(b'\r\n', 1)[0]:
             raise WebSocketError('Handshake failed: ' + data.split(b'\r\n', 1)[0].decode('ascii', 'ignore'))
@@ -49,7 +61,10 @@ class WebSocketClient:
         self.sock.settimeout(self.timeout)
         data = b''
         while b'\r\n\r\n' not in data:
-            chunk = self.sock.recv(1024)
+            try:
+                chunk = self.sock.recv(1024)
+            except OSError as exc:
+                raise WebSocketError('Failed to read handshake: ' + str(exc)) from exc
             if not chunk:
                 break
             data += chunk
@@ -95,7 +110,10 @@ class WebSocketClient:
         masked = bytearray(payload)
         for i in range(length):
             masked[i] ^= mask[i % 4]
-        self.sock.sendall(header + masked)
+        try:
+            self.sock.sendall(header + masked)
+        except OSError as exc:
+            raise WebSocketError('Failed to send WebSocket frame: ' + str(exc)) from exc
 
     def read_text(self):
         deadline = time.time() + self.timeout
@@ -146,7 +164,10 @@ class WebSocketClient:
     def _recv_exact(self, n):
         data = b''
         while len(data) < n:
-            chunk = self.sock.recv(n - len(data))
+            try:
+                chunk = self.sock.recv(n - len(data))
+            except OSError as exc:
+                raise WebSocketError('Failed to read WebSocket frame: ' + str(exc)) from exc
             if not chunk:
                 raise WebSocketError('Socket closed')
             data += chunk
@@ -275,43 +296,50 @@ def discover_device(timeout=2.0, debug=False, logger=None, extra_hosts=None):
 
 
 def upload_file(host, port, upload_path, filename, filepath, chunk_size=16384, debug=False, progress_cb=None,
-                logger=None):
-    client = WebSocketClient(host, port, timeout=10, debug=debug, logger=logger)
+                logger=None, timeout=10):
+    client = WebSocketClient(host, port, timeout=timeout, debug=debug, logger=logger)
+    upload_started = False
     try:
-        client.connect()
-        size = os.path.getsize(filepath)
-        start = f'START:{filename}:{size}:{upload_path}'
-        client._log('Sending START', start)
-        client.send_text(start)
+        try:
+            client.connect()
+            size = os.path.getsize(filepath)
+            start = f'START:{filename}:{size}:{upload_path}'
+            client._log('Sending START', start)
+            client.send_text(start)
 
-        msg = client.read_text()
-        client._log('Received', msg)
-        if not msg:
-            raise WebSocketError('Unexpected response: <empty>')
-        if msg.startswith('ERROR'):
-            raise WebSocketError(msg)
-        if msg != 'READY':
-            raise WebSocketError('Unexpected response: ' + msg)
-
-        sent = 0
-        with open(filepath, 'rb') as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                client.send_binary(chunk)
-                sent += len(chunk)
-                if progress_cb:
-                    progress_cb(sent, size)
-                client.drain_messages()
-
-        # Wait for DONE or ERROR
-        while True:
             msg = client.read_text()
             client._log('Received', msg)
-            if msg == 'DONE':
-                return
+            if not msg:
+                raise WebSocketError('Unexpected response: <empty>')
             if msg.startswith('ERROR'):
                 raise WebSocketError(msg)
+            if msg != 'READY':
+                raise WebSocketError('Unexpected response: ' + msg)
+
+            sent = 0
+            with open(filepath, 'rb') as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    upload_started = True
+                    client.send_binary(chunk)
+                    sent += len(chunk)
+                    if progress_cb:
+                        progress_cb(sent, size)
+                    client.drain_messages()
+
+            # Wait for DONE or ERROR
+            while True:
+                msg = client.read_text()
+                client._log('Received', msg)
+                if msg == 'DONE':
+                    return
+                if msg.startswith('ERROR'):
+                    raise WebSocketError(msg)
+        except UploadError:
+            raise
+        except (WebSocketError, OSError) as exc:
+            raise UploadError(str(exc), upload_started=upload_started) from exc
     finally:
         client.close()

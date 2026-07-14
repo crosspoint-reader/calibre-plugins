@@ -27,6 +27,10 @@ PREFS.defaults['chunk_size'] = 2048
 PREFS.defaults['debug'] = False
 PREFS.defaults['fetch_metadata'] = False
 PREFS.defaults['send_to_root'] = False
+PREFS.defaults['upload_retries'] = 3
+PREFS.defaults['retry_delay'] = 2
+PREFS.defaults['book_cooldown'] = 1
+PREFS.defaults['socket_timeout'] = 30
 # Optimizer settings (mirrors the CrossPoint web server optimizer).
 PREFS.defaults['optimize'] = False
 PREFS.defaults['optimize_grayscale'] = True
@@ -45,6 +49,17 @@ class CrossPointConfigWidget(QWidget):
         self.path = QLineEdit(self)
         self.chunk_size = QSpinBox(self)
         self.chunk_size.setRange(512, 65536)
+        self.upload_retries = QSpinBox(self)
+        self.upload_retries.setRange(0, 10)
+        self.retry_delay = QSpinBox(self)
+        self.retry_delay.setRange(0, 60)
+        self.retry_delay.setSuffix(' s')
+        self.book_cooldown = QSpinBox(self)
+        self.book_cooldown.setRange(0, 60)
+        self.book_cooldown.setSuffix(' s')
+        self.socket_timeout = QSpinBox(self)
+        self.socket_timeout.setRange(5, 300)
+        self.socket_timeout.setSuffix(' s')
         self.debug = QCheckBox('Enable debug logging', self)
         self.fetch_metadata = QCheckBox('Fetch metadata for side-loaded books (downloads each once on connect)', self)
         self.send_to_root = QCheckBox('Send to root (ignore folder template)', self)
@@ -65,6 +80,10 @@ class CrossPointConfigWidget(QWidget):
         self.port.setValue(PREFS['port'])
         self.path.setText(PREFS['path'])
         self.chunk_size.setValue(PREFS['chunk_size'])
+        self.upload_retries.setValue(PREFS['upload_retries'])
+        self.retry_delay.setValue(PREFS['retry_delay'])
+        self.book_cooldown.setValue(PREFS['book_cooldown'])
+        self.socket_timeout.setValue(PREFS['socket_timeout'])
         self.debug.setChecked(PREFS['debug'])
         self.fetch_metadata.setChecked(PREFS['fetch_metadata'])
         self.send_to_root.setChecked(PREFS['send_to_root'])
@@ -85,6 +104,18 @@ class CrossPointConfigWidget(QWidget):
 
         layout.addRow('Upload path', self.path)
         layout.addRow('Chunk size', self.chunk_size)
+
+        reliability_heading = QLabel('<b>Upload reliability</b>')
+        layout.addRow(reliability_heading)
+        reliability_notice = QLabel('Retries resend the current book from the beginning after transient WebSocket failures.')
+        reliability_notice.setWordWrap(True)
+        reliability_notice.setStyleSheet('color: gray; font-style: italic;')
+        layout.addRow('', reliability_notice)
+        layout.addRow('Upload retries', self.upload_retries)
+        layout.addRow('Retry delay', self.retry_delay)
+        layout.addRow('Delay between books', self.book_cooldown)
+        layout.addRow('Socket timeout', self.socket_timeout)
+
         layout.addRow('', self.debug)
         layout.addRow('', self.fetch_metadata)
         layout.addRow('', self.send_to_root)
@@ -129,6 +160,10 @@ class CrossPointConfigWidget(QWidget):
         PREFS['port'] = int(self.port.value())
         PREFS['path'] = self.path.text().strip() or PREFS.defaults['path']
         PREFS['chunk_size'] = int(self.chunk_size.value())
+        PREFS['upload_retries'] = int(self.upload_retries.value())
+        PREFS['retry_delay'] = int(self.retry_delay.value())
+        PREFS['book_cooldown'] = int(self.book_cooldown.value())
+        PREFS['socket_timeout'] = int(self.socket_timeout.value())
         PREFS['debug'] = bool(self.debug.isChecked())
         PREFS['fetch_metadata'] = bool(self.fetch_metadata.isChecked())
         PREFS['send_to_root'] = bool(self.send_to_root.isChecked())
