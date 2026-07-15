@@ -307,10 +307,24 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             self._log(f'[CrossPoint] template format failed: {exc}')
             return [], original_name
 
+    def _dir_exists_on_device(self, name, path):
+        """Return True if directory `name` exists inside `path` on the device."""
+        try:
+            entries = self._http_get_json('/api/files', params={'path': path})
+        except Exception:
+            return False
+        for entry in entries:
+            if entry.get('isDirectory') and entry.get('name') == name:
+                return True
+        return False
+
     def _mkdir_on_device(self, name, path):
         """Create a directory on device via POST /mkdir.
 
-        Silently ignores 400 errors (folder already exists).
+        Silently ignores 400 errors (folder already exists). Some firmware
+        versions fail with other codes or time out when the folder exists,
+        so on any error re-check the listing and only raise if the folder
+        really is missing.
         Uses urllib directly to avoid _http_post_form which wraps all
         errors as ControlError.
         """
@@ -319,15 +333,18 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         req = urllib.request.Request(url, data=body, method='POST',
                                      headers={'Content-Type': 'application/x-www-form-urlencoded'})
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 resp.read()
         except urllib.error.HTTPError as exc:
-            if exc.code == 400:
+            if exc.code == 400 or self._dir_exists_on_device(name, path):
                 self._log(f'[CrossPoint] mkdir ignored (already exists): {name} in {path}')
             else:
                 raise ControlError(desc=f'mkdir failed for {name} in {path}: {exc}')
         except Exception as exc:
-            raise ControlError(desc=f'mkdir failed for {name} in {path}: {exc}')
+            if self._dir_exists_on_device(name, path):
+                self._log(f'[CrossPoint] mkdir error ignored, folder exists: {name} in {path}: {exc}')
+            else:
+                raise ControlError(desc=f'mkdir failed for {name} in {path}: {exc}')
 
     def _ensure_dir(self, parent_path, subdirs):
         """Ensure subdirectories exist under parent_path on device.
@@ -336,12 +353,14 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         relying on the device to build a deep path in a single recursive call.
         A single-level mkdir is the most reliable operation; nested templates
         like ``Fanfiction/Fandom/Series/title.epub`` failed when the whole path
-        was sent at once. ``_mkdir_on_device`` ignores "already exists" (400),
-        so re-creating existing ancestors is a no-op. Returns the full path.
+        was sent at once. Each level is checked first — some firmware fails
+        or hangs on mkdir of an existing folder — and only created when
+        missing. Returns the full path.
         """
         current = parent_path
         for sub in subdirs:
-            self._mkdir_on_device(sub, current)
+            if not self._dir_exists_on_device(sub, current):
+                self._mkdir_on_device(sub, current)
             if current == '/':
                 current = '/' + sub
             else:
@@ -612,6 +631,44 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             raise ControlError(desc=f'Delete failed: {exc.code} {err_body}')
         except Exception as exc:
             raise ControlError(desc=f'Delete failed: {exc}')
+        self._prune_empty_dirs(norm_paths)
+
+    def _prune_empty_dirs(self, deleted_paths):
+        """Best-effort removal of directories left empty after a delete.
+
+        Template uploads create per-author/per-series folders; without this,
+        deleting the books strands empty folders that later confuse users and
+        clutter the device. Walks every ancestor of each deleted book, deepest
+        first, and deletes those whose listing comes back empty. The base
+        upload path and the root are never removed. Failures are logged and
+        ignored — the books themselves are already gone.
+        """
+        base = PREFS['path']
+        if not base.startswith('/'):
+            base = '/' + base
+        if base != '/' and base.endswith('/'):
+            base = base[:-1]
+
+        candidates = set()
+        for p in deleted_paths:
+            d = p.rsplit('/', 1)[0]
+            while d and d != '/' and d != base:
+                candidates.add(d)
+                d = d.rsplit('/', 1)[0]
+
+        for d in sorted(candidates, key=lambda x: x.count('/'), reverse=True):
+            try:
+                entries = self._http_get_json('/api/files', params={'path': d})
+            except Exception as exc:
+                self._log(f'[CrossPoint] prune: listing {d} failed, skipping: {exc}')
+                continue
+            if entries:
+                continue
+            try:
+                self._delete_paths_on_device([d])
+                self._log(f'[CrossPoint] pruned empty folder: {d}')
+            except Exception as exc:
+                self._log(f'[CrossPoint] prune: could not delete {d}: {exc}')
 
     def remove_books_from_metadata(self, paths, booklists):
         from . import metadata_cache as mc
