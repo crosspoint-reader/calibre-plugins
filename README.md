@@ -14,7 +14,7 @@ See [crosspoint_reader/README.md](crosspoint_reader/README.md) for protocol deta
 
 ## Installation
 
-Download the latest release from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases), then in Calibre: **Preferences > Plugins > Load plugin from file**.
+Download the latest release ZIP from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases). Do not open or extract the ZIP; install the ZIP file itself in Calibre via **Preferences > Advanced > Plugins > Load plugin from file**.
 
 ## Development
 

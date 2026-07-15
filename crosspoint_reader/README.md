@@ -112,8 +112,8 @@ identity, then caches it. Most setups never need it — leave it off unless some
 library books still aren't marked.
 
 Install:
-1. Download the latest release from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases) (or zip the contents of this directory).
-2. In Calibre: Preferences > Plugins > Load plugin from file.
+1. Download the latest release ZIP from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases) (or zip the contents of this directory). Do not open or extract the ZIP; install the ZIP file itself.
+2. In Calibre: Preferences > Advanced > Plugins > Load plugin from file.
 3. The device should appear in Calibre once it is discoverable on the network.
 
 No configuration needed. The plugin auto-discovers the device via UDP and
