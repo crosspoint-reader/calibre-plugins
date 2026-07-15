@@ -269,7 +269,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         return 10 * 1024 * 1024 * 1024, 0, 0
 
     def _format_upload_path(self, mi, original_name):
-        """Format an upload path using the send-to-device template.
+        """Format an upload path using the configured upload template.
 
         Returns (subdirs, filename) where subdirs is a list of directory
         components from the template (may be empty for flat templates).
@@ -278,9 +278,11 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             from calibre.library.save_to_disk import config as sconfig, get_components
             from calibre.utils.filenames import ascii_filename
 
-            template = self.save_template()
+            template = PREFS['upload_template']
             if not template:
-                template = sconfig().parse().send_template
+                template = self.save_template()
+                if not template:
+                    template = sconfig().parse().send_template
 
             # get_component_metadata sets format_args['id'] = str(book_id),
             # so we must pass the actual Calibre database ID instead of -1.

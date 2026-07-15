@@ -15,6 +15,7 @@ Default settings:
 - Host fallback: 192.168.4.1
 - Port: 81
 - Upload path: /
+- Upload template: blank, which uses Calibre's send-to-device template
 - Upload reliability: 3 retries, 2s retry delay, 1s delay between books,
   30s socket timeout
 
