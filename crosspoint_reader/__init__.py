@@ -17,13 +17,17 @@ class CrossPointReaderDevice(CrossPointDevice):
         # Calibre loads one primary plugin class per archive. Register the
         # output plugins here so one installation can provide all capabilities.
         from calibre.customize import ui
+        if ui.is_disabled(self):
+            return
 
         output_plugins = [
             # We need to intercept .x4.epub and .x3.epub files for special handling,
             # otherwise Calibre will start treating them as regular .epub files during
             # conversion
             CrossPointEpubDispatcher(self.plugin_path),
+            # Handles converting to a .x3.epub - that is, just an epub optimized for x3
             CrossPointX3EpubOutput(self.plugin_path),
+            # Handles converting to a .x4.epub
             CrossPointX4EpubOutput(self.plugin_path),
         ]
         for output_plugin in output_plugins:
