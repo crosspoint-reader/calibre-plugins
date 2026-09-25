@@ -12,6 +12,10 @@ It can also **optimize EPUBs before transfer** — mirroring the optimizer built
 
 See [crosspoint_reader/README.md](crosspoint_reader/README.md) for protocol details, the optimizer, and configuration.
 
+The plugin also adds `x4.epub` and `x3.epub` output formats. They produce the
+same EPUB output as Calibre's built-in EPUB converter and then run the
+CrossPoint optimizer for the selected device profile.
+
 ## Installation
 
 Download the latest release ZIP from the [releases page](https://github.com/crosspoint-reader/calibre-plugins/releases). Do not open or extract the ZIP; install the ZIP file itself in Calibre via **Preferences > Advanced > Plugins > Load plugin from file**.
