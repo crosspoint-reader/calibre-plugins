@@ -24,9 +24,13 @@ is unchanged and falls back to the untouched input on any error, so a transfer
 is never blocked or corrupted by this pass.
 """
 
+import os
 import posixpath
 import re
+import tempfile
 import zipfile
+
+from .positionmap import MAP_PATH, build_position_map
 
 SPLIT_LIMIT = 9500     # split <body> content bigger than this
 CHUNK_TARGET = 7000    # aim for files of this many bytes of body content
@@ -117,12 +121,6 @@ def _group_inline(inner):
     several same-tag siblings. Anything else stays atomic."""
     groups, cur, cur_len = [], [], 0
 
-    def flush():
-        nonlocal cur, cur_len
-        if ''.join(cur).strip():
-            groups.append(''.join(cur))
-        cur, cur_len = [], 0
-
     for tok in parse_nodes(inner):
         if len(tok) > PARA_LIMIT and not tok.startswith('<'):
             pieces = split_text_sentences(tok, PARA_TARGET)
@@ -137,11 +135,14 @@ def _group_inline(inner):
         else:
             pieces = [tok]
         for piece in pieces:
-            if cur_len + len(piece) > PARA_TARGET and cur_len > 0 and piece.strip():
-                flush()
+            if (cur_len + len(piece) > PARA_TARGET and piece.strip()
+                    and any(part.strip() for part in cur)):
+                groups.append(''.join(cur))
+                cur, cur_len = [], 0
             cur.append(piece)
             cur_len += len(piece)
-    flush()
+    if cur:
+        groups.append(''.join(cur))
     return groups
 
 
@@ -182,29 +183,37 @@ def chunk_nodes(nodes, target):
 
     def flush():
         nonlocal cur, cur_len
-        if ''.join(cur).strip():
-            chunks.append(''.join(cur))
+        content = ''.join(cur)
+        if content.strip():
+            chunks.append(content)
+        elif chunks:
+            chunks[-1] += content
+        else:
+            return  # keep leading whitespace for the first chunk
         cur, cur_len = [], 0
 
     for node in nodes:
-        if len(node) > SPLIT_LIMIT and node.startswith('<'):
-            m = re.match(r'<(\w+)[^>]*>', node)
-            open_tag, close_tag = m.group(0), '</%s>' % m.group(1)
-            inner = node[len(open_tag):-len(close_tag)]
-            flush()
-            for sub in chunk_nodes(parse_nodes(inner), target):
-                chunks.append(open_tag + sub + close_tag)
-            continue
         if len(node) > SPLIT_LIMIT:
             flush()
-            for piece in split_text_sentences(node, target):
-                chunks.append(piece)
+            if node.startswith('<'):
+                m = re.match(r'<(\w+)[^>]*>', node)
+                open_tag, close_tag = m.group(0), '</%s>' % m.group(1)
+                inner = node[len(open_tag):-len(close_tag)]
+                pieces = [open_tag + sub + close_tag for sub in chunk_nodes(parse_nodes(inner), target)]
+            else:
+                pieces = split_text_sentences(node, target)
+            if pieces and cur:
+                pieces[0] = ''.join(cur) + pieces[0]
+                cur, cur_len = [], 0
+            chunks.extend(pieces)
             continue
         if cur_len + len(node) > target and cur_len > 0 and node.strip():
             flush()
         cur.append(node)
         cur_len += len(node)
     flush()
+    if cur:
+        chunks.append(''.join(cur))
     return chunks
 
 
@@ -245,18 +254,20 @@ def _find_attr(tag, attr):
     return m.group(1) if m else None
 
 
-def split_epub_text(path, log, profile=None, opts=None):
+def split_epub_text(path, log, profile=None, opts=None, *, source=None):
     """Rewrite the EPUB at ``path`` in place. Returns a small summary dict.
 
     ``log(tag, message)`` receives per-step events. ``profile``/``opts`` (from
-    the optimizer) enable re-encoding of extracted data-URI images. Never
-    raises: on any unexpected error the file is left as it was.
+    the optimizer) enable re-encoding of extracted data-URI images. ``source``
+    is the original EPUB ZipFile. On any unexpected error the file is left as
+    it was, including the optimizer's unavailable position map marker.
     """
     result = {'paras': 0, 'file_splits': 0, 'fonts': 0, 'dataimgs': 0}
     try:
-        _split_epub_text(path, log, result, profile, opts)
+        _split_epub_text(path, log, result, profile, opts, source)
     except Exception as exc:
         log('SPLIT-ERR', 'text splitting skipped: %s' % exc)
+        return dict.fromkeys(result, 0)
     return result
 
 
@@ -299,9 +310,11 @@ def _extract_data_uris(entries, order, zname, doc, opf, opf_dir, counter, log, p
         entries[new_zname] = data
         order.append(new_zname)
         href = posixpath.relpath(new_zname, opf_dir) if opf_dir else new_zname
-        item = '<item id="%s" href="%s" media-type="%s"/>' % (name, href, mt)
-        nonlocal_opf[0] = re.sub(r'(</(?:\w+:)?manifest>)', item + r'\n  \1',
-                                 nonlocal_opf[0], count=1)
+        item = '<%sitem id="%s" href="%s" media-type="%s"/>'
+        nonlocal_opf[0] = re.sub(
+            r'</((?:\w+:)?)manifest\s*>',
+            lambda m: (item % (m[1], name, href, mt)) + '\n  ' + m[0],
+            nonlocal_opf[0], count=1)
         log('SPLIT', 'extracted %.1f KB data-URI image -> %s' % (len(raw) / 1024.0, fname))
         return '%s="%s"' % (m.group(1), fname)
 
@@ -310,34 +323,38 @@ def _extract_data_uris(entries, order, zname, doc, opf, opf_dir, counter, log, p
     return new_doc, nonlocal_opf[0]
 
 
-def _split_epub_text(path, log, result, profile=None, opts=None):
-    zin = zipfile.ZipFile(path, 'r')
+def _split_epub_text(path, log, result, profile, opts, source):
     entries = {}   # name -> bytes, insertion-ordered
     order = []
-    for n in zin.namelist():
-        if zin.getinfo(n).is_dir():
-            continue
-        entries[n] = zin.read(n)
-        order.append(n)
-    zin.close()
+    with zipfile.ZipFile(path, 'r') as zin:
+        for n in zin.namelist():
+            if zin.getinfo(n).is_dir():
+                continue
+            entries[n] = zin.read(n)
+            order.append(n)
 
     opf_name = next((n for n in order if n.lower().endswith('.opf')), None)
     if not opf_name:
         log('SPLIT-ERR', 'no OPF found, text splitting skipped')
         return
-    opf = entries[opf_name].decode('utf-8', 'replace')
+    original_opf = entries[opf_name]
+    opf = original_opf.decode('utf-8', 'replace')
     opf_dir = posixpath.dirname(opf_name)
 
     # Manifest: id -> (href, full item tag); attribute-order independent.
     items = {}
-    for tag in re.findall(r'<(?:\w+:)?item\b[^>]*/?>', opf):
+    for tag in re.findall(r'<(?:\w+:)?item\b[^>]*>(?:\s*</(?:\w+:)?item\s*>)?', opf):
         iid, href = _find_attr(tag, 'id'), _find_attr(tag, 'href')
         if iid and href:
             items[iid] = (href, tag)
     spine_ids = [i for i in re.findall(r'<(?:\w+:)?itemref\b[^>]*\bidref="([^"]+)"', opf)]
+    manifest_end = re.search(r'</((?:\w+:)?)manifest\s*>', opf)
+    item_name = (manifest_end[1] if manifest_end else '') + 'item'
 
     anchor_map = {}     # (basename_of_orig_href, frag) -> new basename
     chunk_origin = {}   # zip name of a chunk -> basename of the file it was split from
+    fragments = {}      # source spine ZIP path -> ordered output ZIP paths
+    reverted = set()    # source spine files with a failed text pass
 
     for sid in spine_ids:
         if sid not in items:
@@ -365,6 +382,7 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
                 new_body, changed = split_big_paragraphs(m.group(2))
             except Exception as exc:
                 log('SPLIT-ERR', '%s: paragraph pass skipped (%s)' % (posixpath.basename(zname), exc))
+                reverted.add(zname)
                 new_body, changed = m.group(2), False
             if changed:
                 new_doc = doc[:m.start(2)] + new_body + doc[m.end(2):]
@@ -373,6 +391,7 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
                     entries[zname] = doc.encode('utf-8')
                     result['paras'] += 1
                 else:
+                    reverted.add(zname)
                     log('SPLIT-ERR', '%s: paragraph pass produced text diff, reverted'
                         % posixpath.basename(zname))
 
@@ -381,20 +400,28 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
             pieces = split_xhtml_doc(doc, posixpath.basename(zname))
         except Exception as exc:
             log('SPLIT-ERR', '%s: file split skipped (%s)' % (posixpath.basename(zname), exc))
+            reverted.add(zname)
             pieces = []
         if not pieces:
             continue
         joined = ' '.join(visible_text(c) for _, c in pieces)
         if re.sub(r'\s+', ' ', joined).strip() != orig_text:
+            reverted.add(zname)
             log('SPLIT-ERR', '%s: file split produced text diff, reverted'
                 % posixpath.basename(zname))
             continue
 
         zdir = posixpath.dirname(zname)
         hdir = posixpath.dirname(href)
+        part_names = [posixpath.join(zdir, name) for name, _ in pieces]
+        if any(name in entries or '%s_ek%d' % (sid, k) in items
+               for k, name in enumerate(part_names[1:], 1)):
+            reverted.add(zname)
+            log('SPLIT-ERR', '%s: split file or manifest ID already exists' % zname)
+            continue
+        fragments[zname] = part_names
         insert_at = order.index(zname)
-        for k, (name, content) in enumerate(pieces):
-            new_zname = posixpath.join(zdir, name) if zdir else name
+        for k, ((name, content), new_zname) in enumerate(zip(pieces, part_names)):
             entries[new_zname] = content.encode('utf-8')
             chunk_origin[new_zname] = posixpath.basename(href)
             if k > 0:
@@ -402,20 +429,26 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
             for frag in re.findall(r'id="([^"]+)"', content):
                 anchor_map[(posixpath.basename(href), frag)] = name
 
-        new_items = []
-        new_refs = []
-        for k, (name, _) in enumerate(pieces):
+        new_items = [item_tag]
+        new_ids = []
+        for k, (name, _) in enumerate(pieces[1:], 1):
             piece_href = posixpath.join(hdir, name) if hdir else name
-            piece_id = sid if k == 0 else '%s_ek%d' % (sid, k)
-            if k == 0:
-                new_items.append(item_tag)  # original tag keeps id/href/properties
-            else:
-                new_items.append('<item id="%s" href="%s" media-type="application/xhtml+xml"/>'
-                                 % (piece_id, piece_href))
-            new_refs.append('<itemref idref="%s"/>' % piece_id)
+            piece_id = '%s_ek%d' % (sid, k)
+            new_ids.append(piece_id)
+            new_items.append('<%s id="%s" href="%s" media-type="application/xhtml+xml"/>'
+                             % (item_name, piece_id, piece_href))
+
+        def expand_refs(match):
+            refs = [match[0]]
+            for piece_id in new_ids:
+                continuation = match[1] + piece_id + match[2]
+                refs.append(re.sub(r'''\s+(?:xml:)?id=(["']).*?\1''', '', continuation))
+            return '\n    '.join(refs)
+
         opf = opf.replace(item_tag, '\n    '.join(new_items), 1)
-        opf = re.sub(r'<(?:\w+:)?itemref\b[^>]*\bidref="%s"[^>]*/?>' % re.escape(sid),
-                     lambda _m: '\n    '.join(new_refs), opf, count=1)
+        ref_pattern = (r'(<(?:\w+:)?itemref\b[^>]*\s+idref=")%s'
+                       r'("[^>]*>(?:\s*</(?:\w+:)?itemref\s*>)?)') % re.escape(sid)
+        opf = re.sub(ref_pattern, expand_refs, opf, count=1)
         result['file_splits'] += 1
         log('SPLIT', '%s -> %d files (max %d B)' % (
             posixpath.basename(zname), len(pieces), max(len(c) for _, c in pieces)))
@@ -473,20 +506,26 @@ def _split_epub_text(path, log, result, profile=None, opts=None):
         log('SPLIT', 'removed %d embedded font(s)' % result['fonts'])
 
     entries[opf_name] = opf.encode('utf-8')
+    if (source is not None and len(order) == len(set(order))
+            and len(source.namelist()) == len(set(source.namelist()))):
+        entries[MAP_PATH] = build_position_map(source, entries, opf_name, original_opf,
+                                               fragments, reverted)
 
-    tmp = path + '.split-tmp'
-    with zipfile.ZipFile(tmp, 'w') as zout:
-        if 'mimetype' in entries:
-            zout.writestr('mimetype', entries['mimetype'], compress_type=zipfile.ZIP_STORED)
-        for n in order:
-            if n == 'mimetype':
-                continue
-            zout.writestr(n, entries[n], compress_type=zipfile.ZIP_DEFLATED)
-        for n in entries:
-            if n not in order and n != 'mimetype':
-                zout.writestr(n, entries[n], compress_type=zipfile.ZIP_DEFLATED)
-
-    import os
-    os.replace(tmp, path)
+    tmp = tempfile.NamedTemporaryFile(dir=os.path.dirname(os.path.abspath(path)), delete=False)
+    try:
+        with tmp, zipfile.ZipFile(tmp, 'w') as zout:
+            if 'mimetype' in entries:
+                zout.writestr('mimetype', entries['mimetype'], compress_type=zipfile.ZIP_STORED)
+            for n in order:
+                if n != 'mimetype':
+                    zout.writestr(n, entries[n], compress_type=zipfile.ZIP_DEFLATED)
+            ordered = set(order)
+            for n in entries:
+                if n not in ordered and n != 'mimetype':
+                    zout.writestr(n, entries[n], compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(tmp.name, path)
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
     if result['paras']:
         log('SPLIT', 'split oversized paragraphs in %d file(s)' % result['paras'])

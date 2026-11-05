@@ -30,6 +30,8 @@ import re
 import time
 import zipfile
 
+from .positionmap import MAP_PATH, UNAVAILABLE
+
 
 # --- Device profiles (short edge x long edge, portrait) ---------------------
 DEVICE_PROFILES = {
@@ -558,6 +560,7 @@ def optimize_epub(in_path, out_path, profile, opts, log_fn=None):
     Returns a summary dict.
     """
     start = time.time()
+    split_text = getattr(opts, 'split_text', False)
 
     steps = []
 
@@ -609,7 +612,7 @@ def optimize_epub(in_path, out_path, profile, opts, log_fn=None):
                               compress_type=zipfile.ZIP_STORED)
 
             for n in names:
-                if n == 'mimetype':
+                if n == 'mimetype' or (split_text and n == MAP_PATH):
                     continue
                 info = zin.getinfo(n)
                 if info.is_dir():
@@ -664,16 +667,21 @@ def optimize_epub(in_path, out_path, profile, opts, log_fn=None):
                                   compress_type=zipfile.ZIP_DEFLATED)
                 else:
                     zout.writestr(n, data, compress_type=zipfile.ZIP_DEFLATED)
+
+            if split_text:
+                # The text pass replaces this marker only when it publishes a
+                # new EPUB. A rollback keeps the marker and no stale ranges.
+                zout.writestr(MAP_PATH, UNAVAILABLE, compress_type=zipfile.ZIP_DEFLATED)
+
+        if split_text:
+            from .textsplit import split_epub_text
+            split_summary = split_epub_text(out_path, log, profile, opts, source=zin)
+            summary['fixes'] += (split_summary.get('paras', 0)
+                                 + split_summary.get('file_splits', 0)
+                                 + split_summary.get('fonts', 0)
+                                 + split_summary.get('dataimgs', 0))
     finally:
         zin.close()
-
-    if getattr(opts, 'split_text', False):
-        from .textsplit import split_epub_text
-        split_summary = split_epub_text(out_path, log, profile, opts)
-        summary['fixes'] += (split_summary.get('paras', 0)
-                             + split_summary.get('file_splits', 0)
-                             + split_summary.get('fonts', 0)
-                             + split_summary.get('dataimgs', 0))
 
     summary['new_size'] = os.path.getsize(out_path)
     summary['elapsed'] = time.time() - start
