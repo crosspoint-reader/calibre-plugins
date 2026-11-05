@@ -43,8 +43,10 @@ enabled (Preferences > Plugins > device config >
   manifest/spine expanded and `href="...#fragment"` links remapped onto the
   chunk holding the anchor; embedded fonts and `@font-face` rules are removed;
   page-list navs are dropped; and base64 `data:` URI images are extracted into
-  real (optimized) image files. Every text transformation verifies that the
-  visible text is byte-identical and reverts itself on any mismatch or error.
+  real (optimized) image files. Paragraph and file splitting check for visible
+  text changes and revert on a mismatch. The optimizer also writes a
+  [position map for firmware](POSITION_MAP.md) with verified mappings back to
+  the source EPUB.
 
 The target screen size comes from the device profile — **X4 = 480×800**,
 **X3 = 528×792** — which is auto-detected from the device's `/api/status`
@@ -72,7 +74,7 @@ never blocked.
    - **Auto-crop uniform margins** — off by default; trims solid page borders.
    - **Split large chapters/paragraphs, remove fonts (prevents out-of-memory)**
      — on by default; restructures text for the firmware's layout memory limits
-     (see above). Disable it to keep the EPUB's file/paragraph structure as-is.
+     (see above). Disable it to skip chapter and paragraph splitting.
 4. Click **OK**, then **restart Calibre** if it was already running so the new
    settings take effect.
 5. Send a book to the device as usual (right-click → *Send to device*, or the
