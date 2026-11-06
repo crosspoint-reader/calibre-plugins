@@ -427,7 +427,7 @@ def _split_epub_text(path, log, result, profile, opts, source):
             if k > 0:
                 order.insert(insert_at + k, new_zname)
             for frag in re.findall(r'id="([^"]+)"', content):
-                anchor_map[(posixpath.basename(href), frag)] = name
+                anchor_map.setdefault((posixpath.basename(href), frag), name)
 
         new_items = [item_tag]
         new_ids = []
