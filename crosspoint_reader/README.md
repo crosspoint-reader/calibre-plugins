@@ -3,6 +3,11 @@
 This plugin adds CrossPoint Reader as a wireless device in Calibre. It uploads
 EPUB files over WebSocket to the CrossPoint web server.
 
+It also adds `x4.epub` and `x3.epub` output formats to Calibre. These formats
+produce a normal EPUB and then optimize it for the X4 or X3 display,
+respectively. The optimizer uses the quality, grayscale, auto-crop, and text
+splitting settings from the CrossPoint Reader configuration.
+
 Protocol:
 - Connect to ws://<host>:<port>/
 - Send: START:<filename>:<size>:<path>
